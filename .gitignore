@@ -1,0 +1,10 @@
+__pycache__
+*.xml
+*.gz
+*.ogg
+*.zip
+
+.history*
+.history.ra717140
+core.*.hpc.itc.rwth-aachen.de.*
+

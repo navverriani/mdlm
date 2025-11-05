@@ -18,7 +18,11 @@ import transformers
 
 import utils
 
+import gzip
+
 LOGGER = utils.get_logger(__name__)
+
+
 
 
 def wt_detokenizer(string):
@@ -319,57 +323,76 @@ def get_dataset(
     # double block size for sub-sampling
     block_size *= 2
   
-  if dataset_name == 'wikitext103':
-    dataset = datasets.load_dataset(
-      'wikitext',
-      name='wikitext-103-raw-v1',
-      cache_dir=cache_dir)
-  elif dataset_name == 'wikitext2':
-    dataset = datasets.load_dataset(
-      'wikitext',
-      name='wikitext-2-raw-v1',
-      cache_dir=cache_dir)
-  elif dataset_name == 'ptb':
-    dataset = datasets.load_dataset(
-      'ptb_text_only', cache_dir=cache_dir)
-  elif dataset_name == 'lambada':
-    dataset = get_lambada_test_dataset()
-  elif dataset_name == 'text8':
-    assert wrap
-    dataset = get_text8_dataset(
-      cache_dir, max_seq_length=block_size)
-  elif dataset_name == 'text8-crop':
-    dataset = get_text8_dataset(
-      cache_dir, max_seq_length=block_size, crop_train=True)
-  elif dataset_name == 'openwebtext-train':
-    dataset = datasets.load_dataset(
-      'openwebtext',
-      split='train[:-100000]',
-      cache_dir=cache_dir,
-      streaming=streaming)
+  # if dataset_name == 'wikitext103':
+  #   dataset = datasets.load_dataset(
+  #     'wikitext',
+  #     name='wikitext-103-raw-v1',
+  #     cache_dir=cache_dir)
+  # elif dataset_name == 'wikitext2':
+  #   dataset = datasets.load_dataset(
+  #     'wikitext',
+  #     name='wikitext-2-raw-v1',
+  #     cache_dir=cache_dir)
+  # elif dataset_name == 'ptb':
+  #   dataset = datasets.load_dataset(
+  #     'ptb_text_only', cache_dir=cache_dir)
+  # elif dataset_name == 'lambada':
+  #   dataset = get_lambada_test_dataset()
+  # elif dataset_name == 'text8':
+  #   assert wrap
+  #   dataset = get_text8_dataset(
+  #     cache_dir, max_seq_length=block_size)
+  # elif dataset_name == 'text8-crop':
+  #   dataset = get_text8_dataset(
+  #     cache_dir, max_seq_length=block_size, crop_train=True)
+  if dataset_name == 'openwebtext-train':
+    dataset = datasets.load_from_disk(cache_dir)["train"]
+    dataset = dataset.select(range(len(dataset) - 100000))
   elif dataset_name == 'openwebtext-valid':
-    dataset = datasets.load_dataset(
-      'openwebtext',
-      split='train[-100000:]',
-      cache_dir=cache_dir,
-      streaming=streaming)
-  elif dataset_name == 'scientific_papers_arxiv':
-    dataset = datasets.load_dataset(
-      'scientific_papers', 'arxiv',
-      trust_remote_code=True,
-      cache_dir=cache_dir,
-      streaming=streaming)
-  elif dataset_name == 'scientific_papers_pubmed':
-    dataset = datasets.load_dataset(
-      'scientific_papers', 'pubmed',
-      trust_remote_code=True,
-      cache_dir=cache_dir,
-      streaming=streaming)
-  elif dataset_name == 'ag_news':
-    dataset = datasets.load_dataset(
-      'ag_news',
-      cache_dir=cache_dir,
-      streaming=streaming)
+    dataset = datasets.load_from_disk(cache_dir)["train"]
+    dataset = dataset.select(range(len(dataset) - 100000, len(dataset)))
+  elif dataset_name == 'lm1b':
+    dataset = datasets.load_from_disk(cache_dir)
+  elif dataset_name == 'librispeech':
+    gz_training_candidates = [
+      f for f in os.listdir(cache_dir)
+      if "corpus_text_lines" in f and "train" in f and f.endswith(".gz")
+    ]
+    train_gz_path = os.path.join(cache_dir, gz_training_candidates[0])
+    with gzip.open(train_gz_path, "rt", encoding="utf-8") as f:
+      lines = [l.strip() for l in f if l.strip()]
+    train_lines = lines
+
+    gz_validation_candidates = [
+      f for f in os.listdir(cache_dir)
+      if "corpus_text_lines" in f and "dev" in f and f.endswith(".gz")
+    ]
+    val_gz_path = os.path.join(cache_dir, gz_validation_candidates[0])
+    with gzip.open(val_gz_path, "rt", encoding="utf-8") as f:
+      lines = [l.strip() for l in f if l.strip()]
+    val_lines = lines
+
+    dataset = datasets.DatasetDict({
+      "train": datasets.Dataset.from_dict({"text": train_lines}),
+      "validation": datasets.Dataset.from_dict({"text": val_lines}),
+    })
+  # elif dataset_name == 'scientific_papers_arxiv':
+  #   dataset = datasets.load_dataset(
+  #     'scientific_papers', 'arxiv',
+  #     trust_remote_code=True,
+  #     cache_dir=cache_dir,
+  #     streaming=streaming)
+  # elif dataset_name == 'scientific_papers_pubmed':
+  #   dataset = datasets.load_dataset(
+  #     'scientific_papers', 'pubmed',
+  #     trust_remote_code=True,
+  #     cache_dir=cache_dir,
+  #     streaming=streaming)
+  # elif dataset_name == 'ag_news':
+  #   dataset = datasets.load_dataset(
+  #     'ag_news',
+  #     cache_dir=cache_dir,
+  #     streaming=streaming)
   else:
     dataset = datasets.load_dataset(
       dataset_name,
@@ -491,6 +514,13 @@ def get_tokenizer(config):
   elif config.data.tokenizer_name_or_path == 'bert-base-uncased':
     tokenizer = transformers.BertTokenizer.\
       from_pretrained('bert-base-uncased')
+  elif config.data.tokenizer_name_or_path.endswith(".model"):
+    tokenizer = tokenizers.SentencePieceUnigramTokenizer.from_spm(config.data.tokenizer_name_or_path)
+    tokenizer = transformers.PreTrainedTokenizerFast(tokenizer_object=tokenizer)
+    tokenizer.bos_token = "<s>"
+    tokenizer.eos_token = "</s>"
+    if "<pad>" not in tokenizer.get_vocab():
+      tokenizer.add_special_tokens({'pad_token': '<pad>'})
   else:
     tokenizer = transformers.AutoTokenizer.from_pretrained(
       config.data.tokenizer_name_or_path)

@@ -1,0 +1,6 @@
+train: librispeech
+valid: librispeech
+tokenizer_name_or_path:
+cache_dir:
+wrap: True
+streaming: False
