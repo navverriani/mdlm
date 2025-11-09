@@ -531,13 +531,10 @@ def get_tokenizer(config):
         tokenizer = transformers.PreTrainedTokenizerFast(
             tokenizer_object=tokenizer._tokenizer
         )  # https://github.com/huggingface/tokenizers/issues/1105
-        tokenizer.add_special_tokens(
-            {
-                "bos_token": "[BOS]",
-                "eos_token": "[EOS]",
-                "pad_token": "[PAD]",
-            }
-        )
+        tokenizer.bos_token = "<s>"
+        tokenizer.eos_token = "</s>"
+        if "<pad>" not in tokenizer.get_vocab():
+            tokenizer.add_special_tokens({"pad_token": "<pad>"})
 
         tokenizer._tokenizer.post_processor = tokenizers.processors.TemplateProcessing(
             single=f"{tokenizer.bos_token}:0 $A:0 {tokenizer.eos_token}:0",
@@ -771,3 +768,48 @@ class FaultTolerantDistributedSampler(torch.utils.data.DistributedSampler):
             yield index
 
         self.counter = 0
+
+
+import tokenizers
+import transformers
+
+# --- Load SentencePiece Unigram tokenizer ---
+tokenizer_path = "/rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/output/datasets/LibriSpeech/vocab/spm_unigram_10k_train.model"
+spm = tokenizers.SentencePieceUnigramTokenizer.from_spm(tokenizer_path)
+
+tokenizer = transformers.PreTrainedTokenizerFast(tokenizer_object=spm._tokenizer)
+
+tokenizer.add_special_tokens({
+    "bos_token": "[BOS]",
+    "eos_token": "[EOS]",
+    "pad_token": "[PAD]",
+})
+
+tokenizer._tokenizer.post_processor = tokenizers.processors.TemplateProcessing(
+    single=f"{tokenizer.bos_token}:0 $A:0 {tokenizer.eos_token}:0",
+    pair=f"{tokenizer.bos_token}:0 $A:0 {tokenizer.eos_token}:0 $B:1 {tokenizer.eos_token}:1",
+    special_tokens=[
+        (tokenizer.bos_token, tokenizer.bos_token_id),
+        (tokenizer.eos_token, tokenizer.eos_token_id),
+    ],
+)
+
+vocab = tokenizer.get_vocab()
+print(f"Vocab size: {len(vocab)}")
+print(f"[BOS] in vocab: {'[BOS]' in vocab}")
+print(f"[EOS] in vocab: {'[EOS]' in vocab}")
+print(f"[PAD] in vocab: {'[PAD]' in vocab}")
+
+print(f"\nBOS token: '{tokenizer.bos_token}' -> ID: {tokenizer.bos_token_id}")
+print(f"EOS token: '{tokenizer.eos_token}' -> ID: {tokenizer.eos_token_id}")
+print(f"PAD token: '{tokenizer.pad_token}' -> ID: {tokenizer.pad_token_id}")
+
+try:
+    test_text = "HELLO WORLD THIS IS A TEST"
+    encoded = tokenizer.encode(test_text, add_special_tokens=True)
+    print(f"\nTest encoding (first 12): {encoded[:12]}")
+    print("Decoded (keep specials):", tokenizer.decode(encoded, skip_special_tokens=False))
+    print("Decoded (skip specials):", tokenizer.decode(encoded, skip_special_tokens=True))
+except Exception as e:
+    print(f"\n❌ ERROR: {e}")
+
