@@ -531,10 +531,22 @@ def get_tokenizer(config):
         tokenizer = transformers.PreTrainedTokenizerFast(
             tokenizer_object=tokenizer._tokenizer
         )  # https://github.com/huggingface/tokenizers/issues/1105
-        tokenizer.bos_token = "<s>"
-        tokenizer.eos_token = "</s>"
-        if "<pad>" not in tokenizer.get_vocab():
-            tokenizer.add_special_tokens({"pad_token": "<pad>"})
+        tokenizer.add_special_tokens(
+            {
+                "bos_token": "[BOS]",
+                "eos_token": "[EOS]",
+                "pad_token": "[PAD]",
+            }
+        )
+
+        tokenizer._tokenizer.post_processor = tokenizers.processors.TemplateProcessing(
+            single=f"{tokenizer.bos_token}:0 $A:0 {tokenizer.eos_token}:0",
+            pair=f"{tokenizer.bos_token}:0 $A:0 {tokenizer.eos_token}:0 $B:1 {tokenizer.eos_token}:1",
+            special_tokens=[
+                (tokenizer.bos_token, tokenizer.bos_token_id),
+                (tokenizer.eos_token, tokenizer.eos_token_id),
+            ],
+        )
     else:
         tokenizer = transformers.AutoTokenizer.from_pretrained(
             config.data.tokenizer_name_or_path
