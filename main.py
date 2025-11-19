@@ -1,5 +1,7 @@
 import os
 
+import gzip
+import json
 import fsspec
 import hydra
 import lightning as L
@@ -143,6 +145,80 @@ def _ppl_eval(config, logger, tokenizer):
   _, valid_ds = dataloader.get_dataloaders(
     config, tokenizer, skip_train=True, valid_seed=config.seed)
   trainer.validate(model, valid_ds)
+
+
+def _get_scores(config, logger, tokenizer):
+  logger.info('Starting Zero Shot Eval.')
+
+  model = _load_from_checkpoint(config=config,
+                                tokenizer=tokenizer)
+  if config.eval.disable_ema:
+    logger.info('Disabling EMA.')
+    model.ema = None
+
+  batch_size = config.rescore.batch_size
+
+  wandb_logger = None
+  if config.get('wandb', None) is not None:
+    wandb_logger = L.pytorch.loggers.WandbLogger(
+      config=omegaconf.OmegaConf.to_object(config),
+      ** config.wandb)
+  callbacks = []
+  if 'callbacks' in config:
+    for _, callback in config.callbacks.items():
+      callbacks.append(hydra.utils.instantiate(callback))
+
+  model.eval()
+  if torch.cuda.is_available():
+    model = model.to("cuda")
+
+  lm_scores = {}
+
+  if config.rescore.hypothesis_file.endswith(".gz"):
+    with gzip.open(config.rescore.hypotheses_file, 'rt') as f:
+      hypotheses_dict = json.load(f)
+  else:
+    with open(config.rescore.hypotheses_file, 'r') as f:
+      hypotheses_dict = json.load(f)
+
+  for utt_id, nbest_scores in hypotheses_dict.items():
+    hypotheses = [hyp for _, hyp in nbest_scores]
+    tokenized = tokenizer(
+      hypotheses,
+      return_tensors='pt',
+      padding=True,
+      truncation=True,
+      max_length=config.model.length
+    )
+
+    input_ids = tokenized['input_ids'].to('cuda')
+    attention_mask = tokenized['attention_mask'].to('cuda')
+
+    hyp_log_probs = []
+    with torch.no_grad():
+      for i in range(0, len(input_ids), batch_size):
+        batch_ids = input_ids[i:i + batch_size]
+        batch_mask = attention_mask[i:i + batch_size]
+
+        loss_output = model._loss(batch_ids, batch_mask)
+        batch_log_prob = -loss_output.nlls.sum(dim=-1)
+        hyp_log_probs.append(batch_log_prob)
+
+      log_probs = torch.cat(hyp_log_probs).cpu().tolist()
+      scored_hypotheses = list(zip(log_probs, hypotheses))
+
+    lm_scores[utt_id] = scored_hypotheses
+
+    if config.rescore.output_file.endswith('.gz'):
+      with gzip.open(config.rescore.output_file, 'wt') as f:
+        json.dump(lm_scores, f)
+    else:
+      with open(config.rescore.output_file, 'w') as f:
+        json.dump(lm_scores, f)
+
+    return lm_scores
+
+
 
 
 def _train(config, logger, tokenizer):

@@ -99,3 +99,8 @@ checkpointing:
   # Note: `checkpoints` path should correspond to `checkpoint_every_n_steps.dirpath`
   resume_from_ckpt: true
   resume_ckpt_path: ${.save_dir}/checkpoints/last.ckpt
+
+rescore:
+  hypothesis_file: ${cwd:}
+  checkpoint_path: ${eval.checkpoint_path}
+  batch_size: 16
