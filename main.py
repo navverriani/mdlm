@@ -183,6 +183,7 @@ def _get_scores(config, logger, tokenizer):
             padding=True,
             truncation=True,
             max_length=config.model.length,
+            add_special_tokens=True,
         )
 
         input_ids = tokenized["input_ids"].to("cuda")
@@ -195,8 +196,7 @@ def _get_scores(config, logger, tokenizer):
                 batch_mask = attention_mask[i : i + batch_size]
 
                 loss_output = model._loss(batch_ids, batch_mask)
-                masked_nlls = loss_output.nlls * batch_mask
-                batch_log_prob = -masked_nlls.nlls.sum(dim=-1)
+                batch_log_prob = -loss_output.nlls.sum(dim=-1)
                 hyp_log_probs.append(batch_log_prob)
 
             log_probs = torch.cat(hyp_log_probs).cpu().tolist()

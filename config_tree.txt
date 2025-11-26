@@ -8,7 +8,7 @@ CONFIG
 ├── parameterization
 │   └── subs                                                                                                                                                                                                
 ├── time_conditioning
-│   └── False                                                                                                                                                                                               
+│   └── True                                                                                                                                                                                                
 ├── T
 │   └── 0                                                                                                                                                                                                   
 ├── subs_masking
@@ -90,7 +90,7 @@ CONFIG
 │                                                                                                                                                                                                           
 ├── rescore
 │   └── hypothesis_file: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/i6_core/returnn/search/SearchRemoveLabelJob.EBQUb3reIa71/output/search_results.py.gz                                    
-│       output_dir: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/diffusion_lm_2025/jobs/rescore_diffusion_lm_mdlm2024/RescoreDiffusionLMJob.lscJWUNKxOCo/output/rescore_mdlm-librispeech-small
+│       output_dir: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/diffusion_lm_2025/jobs/rescore_diffusion_lm_mdlm2024/RescoreDiffusionLMJob.urMtDB9xwF4m/output/rescore_mdlm-librispeech-small
 │       batch_size: 16                                                                                                                                                                                      
 │                                                                                                                                                                                                           
 ├── callbacks
@@ -121,7 +121,7 @@ CONFIG
 │       valid: wikitext103                                                                                                                                                                                  
 │       tokenizer_name_or_path: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/i6_core/text/label/sentencepiece/train/TrainSentencePieceJob.ofYcs4cMRS8T/output/spm_out.model                   
 │       cache_dir: /share/kuleshov/ssahoo/textdiffusion/data                                                                                                                                                
-│       wrap: true                                                                                                                                                                                          
+│       wrap: false                                                                                                                                                                                         
 │       streaming: false                                                                                                                                                                                    
 │                                                                                                                                                                                                           
 ├── model
@@ -129,7 +129,7 @@ CONFIG
 │       type: ddit                                                                                                                                                                                          
 │       hidden_size: 768                                                                                                                                                                                    
 │       cond_dim: 128                                                                                                                                                                                       
-│       length: 1024                                                                                                                                                                                        
+│       length: 128                                                                                                                                                                                         
 │       n_blocks: 12                                                                                                                                                                                        
 │       n_heads: 12                                                                                                                                                                                         
 │       scale_by_sigma: true                                                                                                                                                                                
