@@ -1,0 +1,4 @@
+- mode=rescore
+- eval.checkpoint_path=/rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/diffusion_lm_2025/jobs/train_diffusion_lm_mdlm2024/TrainDiffusionLMJob.D7pTK4qTuxa5/output/trained_model_mdlm_librispeech_small/checkpoints/best.ckpt
+- rescore.hypothesis_file=/rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/i6_core/returnn/search/SearchRemoveLabelJob.EBQUb3reIa71/output/search_results.py.gz
+- rescore.output_dir=/rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/diffusion_lm_2025/jobs/rescore_diffusion_lm_mdlm2024/RescoreDiffusionLMJob.JZDbRRw3pS5C/output/rescore_mdlm-librispeech-small-05m-256-time-conditioning-v2

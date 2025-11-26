@@ -7,7 +7,7 @@ defaults:
   - /noise: loglinear
   - /lr_scheduler: constant_warmup
 
-mode: train  # train / ppl_eval / sample_eval
+mode: train  # train / ppl_eval / sample_eval / rescore
 diffusion: absorbing_state
 backbone: dit  # dit / dimamba / ar
 parameterization: subs  # subs / d3pm / sedd
@@ -102,5 +102,5 @@ checkpointing:
 
 rescore:
   hypothesis_file: ${cwd:}
-  checkpoint_path: ${eval.checkpoint_path}
+  output_dir: ${cwd:}
   batch_size: 16
