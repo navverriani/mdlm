@@ -239,13 +239,23 @@ def _get_scores(config, logger, tokenizer):
 
         all_log_probs = torch.stack(all_log_probs)
         mean_log_probs = all_log_probs.mean(dim=0).cpu().tolist()
-        scored_hypotheses = sorted(list(zip(mean_log_probs, hypotheses)), key=lambda x: x[0])
+        scored_hypotheses = list(zip(mean_log_probs, hypotheses))
         lm_scores[utt_id] = scored_hypotheses
 
     output_file = os.path.join(config.rescore.output_dir, "lm_scores.py.gz")
 
     with gzip.open(output_file, "wt") as f:
-        f.write(str(lm_scores))
+        f.write("{\n")
+
+        for utt_id, scored_hyps in lm_scores.items():
+            f.write(f"{repr(utt_id)}: [\n")
+
+            for score, hyp in scored_hyps:
+                f.write(f"    ({score}, {repr(hyp)}),\n")
+
+            f.write("],\n")
+
+        f.write("}\n")
 
 
 def _train(config, logger, tokenizer):
