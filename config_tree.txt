@@ -122,7 +122,7 @@ CONFIG
 │       valid: wikitext103                                                      
 │       tokenizer_name_or_path: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-
 │       cache_dir: /share/kuleshov/ssahoo/textdiffusion/data                    
-│       wrap: false                                                             
+│       wrap: true                                                              
 │       streaming: false                                                        
 │                                                                               
 ├── model

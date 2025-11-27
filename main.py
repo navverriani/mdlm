@@ -142,7 +142,6 @@ def _ppl_eval(config, logger, tokenizer):
 
 
 def _get_scores(config, logger, tokenizer):
-
     model = _load_from_checkpoint(config=config, tokenizer=tokenizer)
     if config.eval.disable_ema:
         model.ema = None
@@ -231,7 +230,8 @@ def _get_scores(config, logger, tokenizer):
                     batch_mask = attention_mask[j : j + batch_size]
 
                     loss_output = model._loss(batch_ids, batch_mask)
-                    batch_log_prob = -loss_output.nlls.sum(dim=-1)
+                    lengths = batch_mask.sum(dim=-1)
+                    batch_log_prob = -loss_output.nlls.sum(dim=-1) / lengths
                     hyp_log_probs.append(batch_log_prob)
 
                 log_probs = torch.cat(hyp_log_probs)
