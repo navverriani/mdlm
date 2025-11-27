@@ -91,6 +91,7 @@ CONFIG
 ├── rescore
 │   └── hypothesis_file: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/w
 │       output_dir: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/d
+│       sampling_number: 10                                                     
 │       batch_size: 16                                                          
 │                                                                               
 ├── callbacks
