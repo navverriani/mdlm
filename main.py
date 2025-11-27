@@ -142,7 +142,6 @@ def _ppl_eval(config, logger, tokenizer):
 
 
 def _get_scores(config, logger, tokenizer):
-    import pprint
 
     model = _load_from_checkpoint(config=config, tokenizer=tokenizer)
     if config.eval.disable_ema:
@@ -177,29 +176,59 @@ def _get_scores(config, logger, tokenizer):
 
     for utt_id, nbest_scores in hypotheses_dict.items():
         all_log_probs = []
+        hypotheses = [hyp for _, hyp in nbest_scores]
+
+        vocab = tokenizer.get_vocab()
+        # tokenized = tokenizer(
+        #     hypotheses,
+        #     return_tensors="pt",
+        #     padding=True,
+        #     truncation=True,
+        #     max_length=config.model.length,
+        #     add_special_tokens=True,
+        # )
+
+        hypotheses_ids = []
+        pad_id = tokenizer.pad_token_id
+        bos_id = tokenizer.bos_token_id  # <s>
+        eos_id = tokenizer.eos_token_id  # </s>
+        for hyp in hypotheses:
+            tokens = hyp.split()
+            token_ids = [vocab.get(token, tokenizer.unk_token_id) for token in tokens]
+            token_ids = [bos_id] + token_ids + [eos_id]
+            hypotheses_ids.append(token_ids)
+
+        max_len = config.model.length
+
+        input_ids_list = []
+        attention_masks = []
+
+        for token_ids in hypotheses_ids:
+            if len(token_ids) > max_len:
+                token_ids = token_ids[:max_len]
+
+            # Padding
+            pad_len = max_len - len(token_ids)
+            padded = token_ids + [pad_id] * pad_len
+            mask = [1] * len(token_ids) + [0] * pad_len
+
+            input_ids_list.append(padded)
+            attention_masks.append(mask)
+
+        input_ids = torch.tensor(input_ids_list, dtype=torch.long).to("cuda")
+        attention_mask = torch.tensor(attention_masks, dtype=torch.long).to("cuda")
+
         for i in range(config.rescore.sampling_number):
             seed = 42 + i
             torch.manual_seed(seed)
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
-            hypotheses = [hyp for _, hyp in nbest_scores]
-            tokenized = tokenizer(
-                hypotheses,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=config.model.length,
-                add_special_tokens=True,
-            )
-
-            input_ids = tokenized["input_ids"].to("cuda")
-            attention_mask = tokenized["attention_mask"].to("cuda")
 
             hyp_log_probs = []
             with torch.no_grad():
-                for i in range(0, len(input_ids), batch_size):
-                    batch_ids = input_ids[i : i + batch_size]
-                    batch_mask = attention_mask[i : i + batch_size]
+                for j in range(0, len(input_ids), batch_size):
+                    batch_ids = input_ids[j : j + batch_size]
+                    batch_mask = attention_mask[j : j + batch_size]
 
                     loss_output = model._loss(batch_ids, batch_mask)
                     batch_log_prob = -loss_output.nlls.sum(dim=-1)
@@ -208,15 +237,15 @@ def _get_scores(config, logger, tokenizer):
                 log_probs = torch.cat(hyp_log_probs)
                 all_log_probs.append(log_probs)
 
-            all_log_probs = torch.stack(all_log_probs)
-            mean_log_probs = all_log_probs.mean(dim=0).cpu().tolist()
-            scored_hypotheses = list(zip(mean_log_probs, hypotheses))
-            lm_scores[utt_id] = scored_hypotheses
+        all_log_probs = torch.stack(all_log_probs)
+        mean_log_probs = all_log_probs.mean(dim=0).cpu().tolist()
+        scored_hypotheses = sorted(list(zip(mean_log_probs, hypotheses)), key=lambda x: x[0])
+        lm_scores[utt_id] = scored_hypotheses
 
     output_file = os.path.join(config.rescore.output_dir, "lm_scores.py.gz")
 
     with gzip.open(output_file, "wt") as f:
-        f.write(pprint.pformat(lm_scores, width=120))
+        f.write(str(lm_scores))
 
 
 def _train(config, logger, tokenizer):
