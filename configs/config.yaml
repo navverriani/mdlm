@@ -103,4 +103,5 @@ checkpointing:
 rescore:
   hypothesis_file: ${cwd:}
   output_dir: ${cwd:}
+  sampling_number: 10
   batch_size: 16

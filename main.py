@@ -176,33 +176,42 @@ def _get_scores(config, logger, tokenizer):
             hypotheses_dict = ast.literal_eval(content)
 
     for utt_id, nbest_scores in hypotheses_dict.items():
-        hypotheses = [hyp for _, hyp in nbest_scores]
-        tokenized = tokenizer(
-            hypotheses,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=config.model.length,
-            add_special_tokens=True,
-        )
+        all_log_probs = []
+        for i in range(config.rescore.sampling_number):
+            seed = 42 + i
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+            hypotheses = [hyp for _, hyp in nbest_scores]
+            tokenized = tokenizer(
+                hypotheses,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=config.model.length,
+                add_special_tokens=True,
+            )
 
-        input_ids = tokenized["input_ids"].to("cuda")
-        attention_mask = tokenized["attention_mask"].to("cuda")
+            input_ids = tokenized["input_ids"].to("cuda")
+            attention_mask = tokenized["attention_mask"].to("cuda")
 
-        hyp_log_probs = []
-        with torch.no_grad():
-            for i in range(0, len(input_ids), batch_size):
-                batch_ids = input_ids[i : i + batch_size]
-                batch_mask = attention_mask[i : i + batch_size]
+            hyp_log_probs = []
+            with torch.no_grad():
+                for i in range(0, len(input_ids), batch_size):
+                    batch_ids = input_ids[i : i + batch_size]
+                    batch_mask = attention_mask[i : i + batch_size]
 
-                loss_output = model._loss(batch_ids, batch_mask)
-                batch_log_prob = -loss_output.nlls.sum(dim=-1)
-                hyp_log_probs.append(batch_log_prob)
+                    loss_output = model._loss(batch_ids, batch_mask)
+                    batch_log_prob = -loss_output.nlls.sum(dim=-1)
+                    hyp_log_probs.append(batch_log_prob)
 
-            log_probs = torch.cat(hyp_log_probs).cpu().tolist()
-            scored_hypotheses = list(zip(log_probs, hypotheses))
+                log_probs = torch.cat(hyp_log_probs)
+                all_log_probs.append(log_probs)
 
-        lm_scores[utt_id] = scored_hypotheses
+            all_log_probs = torch.stack(all_log_probs)
+            mean_log_probs = all_log_probs.mean(dim=0).cpu().tolist()
+            scored_hypotheses = list(zip(mean_log_probs, hypotheses))
+            lm_scores[utt_id] = scored_hypotheses
 
     output_file = os.path.join(config.rescore.output_dir, "lm_scores.py.gz")
 
