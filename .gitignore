@@ -8,3 +8,6 @@ __pycache__
 .history.ra717140
 core.*.hpc.itc.rwth-aachen.de.*
 outputs
+checkpoints
+config_tree.txt
+wandb

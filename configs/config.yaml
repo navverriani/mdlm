@@ -14,6 +14,7 @@ parameterization: subs  # subs / d3pm / sedd
 time_conditioning: False
 T: 0  # 0 (continuous time) / 1000 
 subs_masking: False
+behaviour_version: 1
 
 seed: 1
 

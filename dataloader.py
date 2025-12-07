@@ -207,17 +207,10 @@ def get_text8_dataset(cache_dir, max_seq_length=256, drop_last=True, crop_train=
     else:
         cache_dir = f"{cache_dir}/text8-crop-train"
     split_names = ["train", "validation", "test"]
-    if not all(
-        [utils.fsspec_exists(os.path.join(cache_dir, split)) for split in split_names]
-    ):
+    if not all([utils.fsspec_exists(os.path.join(cache_dir, split)) for split in split_names]):
         # Check if raw data exists
         raw_cache_dir = os.path.join(cache_dir, "raw_data")
-        if not all(
-            [
-                utils.fsspec_exists(os.path.join(raw_cache_dir, f"text8.{split}.txt"))
-                for split in split_names
-            ]
-        ):
+        if not all([utils.fsspec_exists(os.path.join(raw_cache_dir, f"text8.{split}.txt")) for split in split_names]):
             if not utils.fsspec_exists(os.path.join(raw_cache_dir, "text8.zip")):
                 utils.fsspec_mkdirs(raw_cache_dir, exist_ok=True)
                 LOGGER.info("Downloading text8 from URL {}.".format(url))
@@ -304,6 +297,7 @@ def get_dataset(
     block_size=1024,
     num_proc=len(os.sched_getaffinity(0)),
     streaming=False,
+    returnn_config=None,
 ):
     if wrap:
         filename = f"{dataset_name}_{mode}_bs{block_size}_wrapped.dat"
@@ -373,12 +367,8 @@ def get_dataset(
                     if line:
                         yield {"text": line}
 
-        train_dataset = datasets.Dataset.from_generator(
-            lambda: read_gzip_lines(train_gz_path)
-        )
-        val_dataset = datasets.Dataset.from_generator(
-            lambda: read_gzip_lines(val_gz_path)
-        )
+        train_dataset = datasets.Dataset.from_generator(lambda: read_gzip_lines(train_gz_path))
+        val_dataset = datasets.Dataset.from_generator(lambda: read_gzip_lines(val_gz_path))
 
         dataset = datasets.DatasetDict(
             {
@@ -386,6 +376,47 @@ def get_dataset(
                 "validation": val_dataset,
             }
         )
+
+    elif dataset_name == "returnn":
+        from typing import Dict, Any
+        from omegaconf import OmegaConf
+
+        dataset_dict: Dict[str, Dict[str, Any]] = OmegaConf.to_container(returnn_config, resolve=True)
+
+        from functools import partial
+        from returnn.datasets import init_dataset, Dataset as ReturnnDataset
+
+        if mode == "train":
+            if "train" in dataset_dict:
+                ds_cfg = dataset_dict["train"]
+            else:
+                ds_cfg = dataset_dict
+        else:
+            if "dev" in dataset_dict:
+                ds_cfg = dataset_dict["dev"]
+            else:
+                ds_cfg = dataset_dict
+
+        dataset_returnn = init_dataset(ds_cfg)
+        epoch = 1
+
+        def returnn_dataset_iter(ds: ReturnnDataset):
+            nonlocal epoch
+
+            ds.init_seq_order(epoch=epoch)
+
+            keys = ds.get_data_keys()
+            i = 0
+            while ds.is_less_than_num_seqs(i):
+                ds.load_seqs(i, i + 1)
+                yield {key: ds.get_data(i, key) for key in keys}
+                i += 1
+
+            ds.finish_epoch()
+            epoch += 1
+
+        dataset = datasets.Dataset.from_generator(partial(returnn_dataset_iter, ds=dataset_returnn))
+
     # elif dataset_name == 'scientific_papers_arxiv':
     #   dataset = datasets.load_dataset(
     #     'scientific_papers', 'arxiv',
@@ -404,14 +435,15 @@ def get_dataset(
     #     cache_dir=cache_dir,
     #     streaming=streaming)
     else:
-        dataset = datasets.load_dataset(
-            dataset_name, cache_dir=cache_dir, streaming=streaming
-        )
+        dataset = datasets.load_dataset(dataset_name, cache_dir=cache_dir, streaming=streaming)
 
-    if dataset_name in ["lambada", "openwebtext-train", "openwebtext-valid"]:
+    if dataset_name in ["lambada", "openwebtext-train", "openwebtext-valid", "returnn"]:
         data = dataset
     else:
         data = dataset[mode]
+
+    if dataset_name in ["returnn"]:
+        return data
 
     if dataset_name.startswith("wikitext"):
         detokenizer = wt_detokenizer
@@ -473,9 +505,7 @@ def get_dataset(
         return tokens
 
     if streaming:
-        tokenized_dataset = data.map(
-            preprocess_and_tokenize, batched=True, desc="Tokenizing"
-        )
+        tokenized_dataset = data.map(preprocess_and_tokenize, batched=True, desc="Tokenizing")
     else:
         tokenized_dataset = data.map(
             preprocess_and_tokenize,
@@ -487,9 +517,7 @@ def get_dataset(
     if dataset_name == "ptb":
         tokenized_dataset = tokenized_dataset.remove_columns("sentence")
     elif "scientific_papers" in dataset_name:
-        tokenized_dataset = tokenized_dataset.remove_columns(
-            ["article", "abstract", "section_names"]
-        )
+        tokenized_dataset = tokenized_dataset.remove_columns(["article", "abstract", "section_names"])
     elif dataset_name == "ag_news":
         tokenized_dataset = tokenized_dataset.remove_columns(["text", "label"])
     else:
@@ -499,13 +527,9 @@ def get_dataset(
         tokenized_dataset.save_to_disk(_path)
         return tokenized_dataset.with_format("torch")
 
-    group_texts = functools.partial(
-        _group_texts, block_size=block_size, bos=BOS, eos=EOS
-    )
+    group_texts = functools.partial(_group_texts, block_size=block_size, bos=BOS, eos=EOS)
     if streaming:
-        chunked_dataset = tokenized_dataset.map(
-            group_texts, batched=True, desc="Grouping"
-        )
+        chunked_dataset = tokenized_dataset.map(group_texts, batched=True, desc="Grouping")
     else:
         chunked_dataset = tokenized_dataset.map(
             group_texts,
@@ -525,9 +549,7 @@ def get_tokenizer(config):
     elif config.data.tokenizer_name_or_path == "bert-base-uncased":
         tokenizer = transformers.BertTokenizer.from_pretrained("bert-base-uncased")
     elif config.data.tokenizer_name_or_path.endswith(".model"):
-        tokenizer = tokenizers.SentencePieceUnigramTokenizer.from_spm(
-            config.data.tokenizer_name_or_path
-        )
+        tokenizer = tokenizers.SentencePieceUnigramTokenizer.from_spm(config.data.tokenizer_name_or_path)
         tokenizer = transformers.PreTrainedTokenizerFast(
             tokenizer_object=tokenizer._tokenizer
         )  # https://github.com/huggingface/tokenizers/issues/1105
@@ -545,13 +567,9 @@ def get_tokenizer(config):
             ],
         )
     else:
-        tokenizer = transformers.AutoTokenizer.from_pretrained(
-            config.data.tokenizer_name_or_path
-        )
+        tokenizer = transformers.AutoTokenizer.from_pretrained(config.data.tokenizer_name_or_path)
 
-    if isinstance(tokenizer, transformers.GPT2TokenizerFast) or isinstance(
-        tokenizer, transformers.GPT2Tokenizer
-    ):
+    if isinstance(tokenizer, transformers.GPT2TokenizerFast) or isinstance(tokenizer, transformers.GPT2Tokenizer):
         tokenizer._tokenizer.post_processor = tokenizers.processors.BertProcessing(
             (tokenizer.bos_token, tokenizer.bos_token_id),
             (tokenizer.eos_token, tokenizer.eos_token_id),
@@ -562,15 +580,11 @@ def get_tokenizer(config):
     #  [BOS] sent2-fragment [EOS] sent3 [EOS]
     if tokenizer.bos_token is None:
         if tokenizer.cls_token is None:
-            raise AttributeError(
-                f"Tokenizer must have a bos_token or cls_token: {tokenizer}"
-            )
+            raise AttributeError(f"Tokenizer must have a bos_token or cls_token: {tokenizer}")
         tokenizer.bos_token = tokenizer.cls_token
     if tokenizer.eos_token is None:
         if tokenizer.sep_token is None:
-            raise AttributeError(
-                f"Tokenizer must have a eos_token or sep_token: {tokenizer}"
-            )
+            raise AttributeError(f"Tokenizer must have a eos_token or sep_token: {tokenizer}")
         tokenizer.eos_token = tokenizer.sep_token
     if tokenizer.pad_token is None:
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
@@ -578,33 +592,23 @@ def get_tokenizer(config):
     return tokenizer
 
 
-def get_dataloaders(
-    config, tokenizer, skip_train=False, skip_valid=False, valid_seed=None
-):
+def get_dataloaders(config, tokenizer, skip_train=False, skip_valid=False, valid_seed=None):
     num_gpus = torch.cuda.device_count()
     assert config.loader.global_batch_size == (
-        config.loader.batch_size
-        * config.trainer.num_nodes
-        * num_gpus
-        * config.trainer.accumulate_grad_batches
+        config.loader.batch_size * config.trainer.num_nodes * num_gpus * config.trainer.accumulate_grad_batches
     )
-    if (
-        config.loader.global_batch_size
-        % (num_gpus * config.trainer.accumulate_grad_batches)
-        != 0
-    ):
+    if config.loader.global_batch_size % (num_gpus * config.trainer.accumulate_grad_batches) != 0:
         raise ValueError(
             f"Train Batch Size {config.training.batch_size}"
             f"not divisible by {num_gpus} gpus with accumulation "
             f"{config.trainer.accumulate_grad_batches}."
         )
     if config.loader.eval_global_batch_size % num_gpus != 0:
-        raise ValueError(
-            f"Eval Batch Size for {config.eval.batch_size} not divisible by {num_gpus}."
-        )
+        raise ValueError(f"Eval Batch Size for {config.eval.batch_size} not divisible by {num_gpus}.")
     if skip_train:
         train_set = None
     else:
+        returnn_train_config = config.data.returnn_train_config if config.data.train == "returnn" else None
         train_set = get_dataset(
             config.data.train,
             tokenizer,
@@ -612,6 +616,7 @@ def get_dataloaders(
             wrap=config.data.wrap,
             cache_dir=config.data.cache_dir,
             block_size=config.model.length,
+            returnn_config=returnn_train_config,
         )
 
     if config.data.valid in ["text8", "lm1b", "ag_news"]:
@@ -621,6 +626,7 @@ def get_dataloaders(
     if skip_valid:
         valid_set = None
     else:
+        returnn_valid_config = config.data.returnn_eval_config if config.data.valid == "returnn" else None
         valid_set = get_dataset(
             config.data.valid,
             tokenizer,
@@ -629,10 +635,24 @@ def get_dataloaders(
             cache_dir=config.data.cache_dir,
             block_size=config.model.length,
             streaming=False,
+            returnn_config=returnn_valid_config,
         )
 
     if skip_train:
         train_loader = None
+    elif config.returnn_batching_enabled:
+        from returnn.config import Config as ReturnnConfig
+        import returnn.torch.data.pipeline as data_pipeline
+
+        assert config.data.train == "returnn"
+        returnn_config = ReturnnConfig(config.returnn_batching)
+
+        batches_dataset = data_pipeline.get_batching_iterable_dataset_from_config(
+            dataset=train_set, config=returnn_config, train=True
+        )
+
+        train_loader = data_pipeline.create_data_loader_from_batches(batches_dataset)
+
     else:
         train_loader = torch.utils.data.DataLoader(
             train_set,
@@ -645,6 +665,18 @@ def get_dataloaders(
         train_loader.tokenizer = tokenizer
     if skip_valid:
         valid_loader = None
+    elif config.returnn_batching_enabled:
+        from returnn.config import Config as ReturnnConfig
+        import returnn.torch.data.pipeline as data_pipeline
+
+        assert config.data.valid == "returnn"
+        returnn_config = ReturnnConfig(config.returnn_batching)
+
+        batches_dataset = data_pipeline.get_batching_iterable_dataset_from_config(
+            dataset=valid_set, config=returnn_config, train=False
+        )
+
+        valid_loader = data_pipeline.create_data_loader_from_batches(batches_dataset)
     else:
         if valid_seed is None:
             shuffle_valid = False
@@ -745,9 +777,7 @@ class FaultTolerantDistributedSampler(torch.utils.data.DistributedSampler):
             if padding_size <= len(indices):
                 indices += indices[:padding_size]
             else:
-                indices += (indices * math.ceil(padding_size / len(indices)))[
-                    :padding_size
-                ]
+                indices += (indices * math.ceil(padding_size / len(indices)))[:padding_size]
         else:
             # remove tail of data to make it evenly divisible.
             indices = indices[: self.total_size]
