@@ -91,9 +91,12 @@ CONFIG
 │       resume_ckpt_path: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/
 │                                                                               
 ├── rescore
-│   └── hypothesis_file: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/w
+│   └── rescoring_method: mdlm_elbo                                             
+│       full_length: true                                                       
+│       zero_include: true                                                      
+│       hypothesis_file: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/w
 │       output_dir: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/d
-│       sampling_number: 10                                                     
+│       sampling_number: 6                                                      
 │       batch_size: 16                                                          
 │                                                                               
 ├── callbacks

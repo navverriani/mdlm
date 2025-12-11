@@ -102,6 +102,9 @@ checkpointing:
   resume_ckpt_path: ${.save_dir}/checkpoints/last.ckpt
 
 rescore:
+  rescoring_method: "mdlm_elbo"
+  full_length: true
+  zero_include: true
   hypothesis_file: ${cwd:}
   output_dir: ${cwd:}
   sampling_number: 10
