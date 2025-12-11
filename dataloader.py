@@ -9,11 +9,12 @@ import typing
 import urllib
 import zipfile
 
+import torch
+import numpy as np
 import datasets
 import fsspec
 import requests
 import tokenizers
-import torch
 import transformers
 
 import utils
@@ -21,6 +22,19 @@ import utils
 import gzip
 
 LOGGER = utils.get_logger(__name__)
+
+
+def to_numpy_recursive(x):
+    if isinstance(x, np.ndarray):
+        return x
+    if isinstance(x, (int, float, str)):
+        return x
+    if isinstance(x, list):
+        # convert every item inside the list
+        return np.array([to_numpy_recursive(v) for v in x], dtype=object)
+    if isinstance(x, tuple):
+        return np.array([to_numpy_recursive(v) for v in x], dtype=object)
+    return x
 
 
 def wt_detokenizer(string):
@@ -103,6 +117,61 @@ def scientific_papers_detokenizer(x):
     x = wt_detokenizer(x)
     x = lm1b_detokenizer(x)
     return x
+
+
+class ReturnnDataLoaderWrapper:
+    def __init__(self, returnn_loader, max_len, tokenizer):
+        self.loader = returnn_loader
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+
+    def __iter__(self):
+        for batch in self.loader:
+            if "data" in batch:
+                data = batch["data"]
+                seq_lengths = batch.get("data:seq_len", None)
+
+                batch_size, seq_len = data.shape
+                device = data.device if isinstance(data, torch.Tensor) else "cpu"
+                dtype = data.dtype if isinstance(data, torch.Tensor) else torch.long
+
+                # Convert to torch tensor if needed
+                if not isinstance(data, torch.Tensor):
+                    data = torch.tensor(data, dtype=dtype, device=device)
+
+                if not isinstance(seq_lengths, torch.Tensor):
+                    seq_lengths = torch.tensor(seq_lengths, dtype=torch.int32, device=device)
+
+                if hasattr(self.tokenizer, "pad_token_id") and self.tokenizer.pad_token_id is not None:
+                    pad_token_id = self.tokenizer.pad_token_id
+                else:
+                    pad_token_id = 0
+
+                padding_mask = torch.arange(seq_len, device=device)[None, :] >= seq_lengths[:, None]
+                replace_mask = padding_mask & (data == 0)
+                data = data.masked_fill(replace_mask, pad_token_id)
+
+                attention_mask = ~padding_mask
+                attention_mask = attention_mask.long()
+
+                batch["input_ids"] = data
+                batch["attention_mask"] = attention_mask
+
+                del batch["data"]
+            if "data:seq_len" in batch:
+                del batch["data:seq_len"]
+
+            yield batch
+
+    def __len__(self):
+        return len(self.loader)
+
+    @property
+    def dataset(self):
+        return None
+
+    def __getattr__(self, name):
+        return getattr(self.loader, name)
 
 
 class Text8Tokenizer(transformers.PreTrainedTokenizer):
@@ -305,7 +374,7 @@ def get_dataset(
         filename = f"{dataset_name}_{mode}_bs{block_size}_unwrapped.dat"
     _path = os.path.join(cache_dir, filename)
 
-    if utils.fsspec_exists(_path):
+    if utils.fsspec_exists(_path) and dataset_name != "returnn":
         LOGGER.info(f"Loading data from: {_path}")
         return datasets.load_from_disk(_path).with_format("torch")
     LOGGER.info(f"Generating new data at: {_path}")
@@ -400,22 +469,62 @@ def get_dataset(
         dataset_returnn = init_dataset(ds_cfg)
         epoch = 1
 
+        # def returnn_dataset_iter(ds: ReturnnDataset):
+        #     nonlocal epoch
+        #
+        #     ds.init_seq_order(epoch=epoch)
+        #
+        #     keys = ds.get_data_keys()
+        #     i = 0
+        #     while ds.is_less_than_num_seqs(i):
+        #         ds.load_seqs(i, i + 1)
+        #         yield {key: ds.get_data(i, key) for key in keys}
+        #         i += 1
+        #
+        #     ds.finish_epoch()
+        #     epoch += 1
+
         def returnn_dataset_iter(ds: ReturnnDataset):
             nonlocal epoch
 
             ds.init_seq_order(epoch=epoch)
-
             keys = ds.get_data_keys()
+
             i = 0
             while ds.is_less_than_num_seqs(i):
                 ds.load_seqs(i, i + 1)
-                yield {key: ds.get_data(i, key) for key in keys}
+
+                out = {}
+                for key in keys:
+                    x = ds.get_data(i, key)
+                    x = to_numpy_recursive(x)
+                    out[key] = x
+
+                yield out
                 i += 1
 
             ds.finish_epoch()
             epoch += 1
 
+        def add_special_tokens(sample, tokenizer, max_len):
+            if "data" not in sample:
+                return sample
+
+            data = np.asarray(sample["data"])
+
+            bos = np.array([tokenizer.bos_token_id], dtype=data.dtype)
+            eos = np.array([tokenizer.eos_token_id], dtype=data.dtype)
+
+            new_data = np.concatenate([bos, data, eos])
+
+            if len(new_data) > max_len:
+                new_data = new_data[:max_len]
+
+            sample["data"] = new_data
+            return sample
+
         dataset = datasets.Dataset.from_generator(partial(returnn_dataset_iter, ds=dataset_returnn))
+        dataset = dataset.map(lambda sample: add_special_tokens(sample, tokenizer, block_size))
 
     # elif dataset_name == 'scientific_papers_arxiv':
     #   dataset = datasets.load_dataset(
@@ -443,7 +552,7 @@ def get_dataset(
         data = dataset[mode]
 
     if dataset_name in ["returnn"]:
-        return data
+        return data.with_format("numpy")
 
     if dataset_name.startswith("wikitext"):
         detokenizer = wt_detokenizer
@@ -618,6 +727,8 @@ def get_dataloaders(config, tokenizer, skip_train=False, skip_valid=False, valid
             block_size=config.model.length,
             returnn_config=returnn_train_config,
         )
+        # Not supported with returnn yet
+        assert not config.eval.compute_generative_perplexity
 
     if config.data.valid in ["text8", "lm1b", "ag_news"]:
         validation_split = "test"
@@ -626,7 +737,7 @@ def get_dataloaders(config, tokenizer, skip_train=False, skip_valid=False, valid
     if skip_valid:
         valid_set = None
     else:
-        returnn_valid_config = config.data.returnn_eval_config if config.data.valid == "returnn" else None
+        returnn_valid_config = config.data.returnn_valid_config if config.data.valid == "returnn" else None
         valid_set = get_dataset(
             config.data.valid,
             tokenizer,
@@ -637,6 +748,8 @@ def get_dataloaders(config, tokenizer, skip_train=False, skip_valid=False, valid
             streaming=False,
             returnn_config=returnn_valid_config,
         )
+        # Not supported with returnn yet
+        assert not config.eval.compute_generative_perplexity
 
     if skip_train:
         train_loader = None
@@ -652,6 +765,8 @@ def get_dataloaders(config, tokenizer, skip_train=False, skip_valid=False, valid
         )
 
         train_loader = data_pipeline.create_data_loader_from_batches(batches_dataset)
+        train_loader.tokenizer = tokenizer
+        train_loader = ReturnnDataLoaderWrapper(train_loader, config.model.length, tokenizer)
 
     else:
         train_loader = torch.utils.data.DataLoader(
@@ -677,6 +792,8 @@ def get_dataloaders(config, tokenizer, skip_train=False, skip_valid=False, valid
         )
 
         valid_loader = data_pipeline.create_data_loader_from_batches(batches_dataset)
+        valid_loader.tokenizer = tokenizer
+        valid_loader = ReturnnDataLoaderWrapper(valid_loader, config.model.length, tokenizer)
     else:
         if valid_seed is None:
             shuffle_valid = False

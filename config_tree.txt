@@ -1,6 +1,6 @@
 CONFIG
 ├── mode
-│   └── train                                                                   
+│   └── rescore                                                                 
 ├── diffusion
 │   └── absorbing_state                                                         
 ├── backbone
@@ -18,16 +18,16 @@ CONFIG
 ├── seed
 │   └── 1                                                                       
 ├── loader
-│   └── global_batch_size: 256                                                  
-│       eval_global_batch_size: 256                                             
-│       batch_size: 256                                                         
-│       eval_batch_size: 64                                                     
-│       num_workers: 8                                                          
+│   └── global_batch_size: 512                                                  
+│       eval_global_batch_size: 512                                             
+│       batch_size: 512                                                         
+│       eval_batch_size: 512                                                    
+│       num_workers: 2                                                          
 │       pin_memory: true                                                        
 │                                                                               
 ├── sampling
 │   └── predictor: ddpm_cache                                                   
-│       steps: 1000                                                             
+│       steps: 128                                                              
 │       noise_removal: true                                                     
 │       num_sample_batches: 2                                                   
 │       num_sample_log: 2                                                       
@@ -43,7 +43,7 @@ CONFIG
 │       change_of_variables: false                                              
 │                                                                               
 ├── eval
-│   └── checkpoint_path: ''                                                     
+│   └── checkpoint_path: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/w
 │       disable_ema: false                                                      
 │       compute_generative_perplexity: false                                    
 │       perplexity_batch_size: 8                                                
@@ -67,7 +67,7 @@ CONFIG
 │       gradient_clip_val: 1.0                                                  
 │       precision: bf16                                                         
 │       num_sanity_val_steps: 2                                                 
-│       max_steps: 2000000                                                      
+│       max_steps: 1000000                                                      
 │       log_every_n_steps: 10                                                   
 │       limit_train_batches: 1.0                                                
 │       limit_val_batches: 1.0                                                  
@@ -82,8 +82,8 @@ CONFIG
 │       id: None_1                                                              
 │       tags:                                                                   
 │       - loglinear                                                             
-│       - returnn                                                               
-│       - returnn                                                               
+│       - openwebtext                                                           
+│       - wikitext103                                                           
 │                                                                               
 ├── checkpointing
 │   └── save_dir: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/projects
@@ -91,8 +91,8 @@ CONFIG
 │       resume_ckpt_path: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/
 │                                                                               
 ├── rescore
-│   └── hypothesis_file: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/p
-│       output_dir: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/projec
+│   └── hypothesis_file: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/w
+│       output_dir: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/d
 │       sampling_number: 10                                                     
 │       batch_size: 16                                                          
 │                                                                               
@@ -120,66 +120,12 @@ CONFIG
 │         logging_interval: step                                                
 │                                                                               
 ├── data
-│   └── train: returnn                                                          
-│       valid: returnn                                                          
-│       tokenizer_name_or_path: gpt2                                            
-│       cache_dir: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/di
-│       wrap: false                                                             
+│   └── train: openwebtext                                                      
+│       valid: wikitext103                                                      
+│       tokenizer_name_or_path: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-
+│       cache_dir: /share/kuleshov/ssahoo/textdiffusion/data                    
+│       wrap: true                                                              
 │       streaming: false                                                        
-│       returnn_train_config:                                                   
-│         class: LmDataset                                                      
-│         corpus_file:                                                          
-│         - /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/i6_core/t
-│         - /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/i6_core/t
-│         use_cache_manager: true                                               
-│         orth_vocab:                                                           
-│           class: SentencePieces                                               
-│           model_file: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/wo
-│         seq_end_symbol: null                                                  
-│         unknown_symbol: null                                                  
-│         partition_epoch: 20                                                   
-│         seq_ordering: laplace:.1000                                           
-│       returnn_valid_config:                                                   
-│         dev:                                                                  
-│           class: MetaDataset                                                  
-│           datasets:                                                           
-│             ogg_zip:                                                          
-│               class: OggZipDataset                                            
-│               path:                                                           
-│               - /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/i6_
-│               use_cache_manager: true                                         
-│               audio: null                                                     
-│               targets:                                                        
-│                 class: SentencePieces                                         
-│                 model_file: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08
-│               fixed_random_seed: 1                                            
-│               seq_ordering: sorted_reverse                                    
-│               fixed_random_subset: 3000                                       
-│           data_map:                                                           
-│             data:                                                             
-│             - ogg_zip                                                         
-│             - classes                                                         
-│           seq_order_control_dataset: ogg_zip                                  
-│         devtrain:                                                             
-│           class: MetaDataset                                                  
-│           datasets:                                                           
-│             ogg_zip:                                                          
-│               class: OggZipDataset                                            
-│               path:                                                           
-│               - /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/i6_
-│               use_cache_manager: true                                         
-│               audio: null                                                     
-│               targets:                                                        
-│                 class: SentencePieces                                         
-│                 model_file: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08
-│               fixed_random_seed: 1                                            
-│               seq_ordering: sorted_reverse                                    
-│               fixed_random_subset: 3000                                       
-│           data_map:                                                           
-│             data:                                                             
-│             - ogg_zip                                                         
-│             - classes                                                         
-│           seq_order_control_dataset: ogg_zip                                  
 │                                                                               
 ├── model
 │   └── name: small                                                             
@@ -202,13 +148,7 @@ CONFIG
 │       sigma_min: 0.0001                                                       
 │       sigma_max: 20                                                           
 │                                                                               
-├── lr_scheduler
-│   └── _target_: transformers.get_constant_schedule_with_warmup                
-│       num_warmup_steps: 2500                                                  
-│                                                                               
-├── returnn_batching_enabled
-│   └── True                                                                    
-└── returnn_batching
-    └── batch_size: 32768                                                       
-        max_seqs: 256                                                           
+└── lr_scheduler
+    └── _target_: transformers.get_constant_schedule_with_warmup                
+        num_warmup_steps: 2500                                                  
                                                                                 
