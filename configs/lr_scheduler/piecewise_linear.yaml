@@ -1,0 +1,6 @@
+_target_: "returnn.util.math.PiecewiseLinear"
+values:
+  "0": 1e-05
+  "450000": 0.001
+  "900000": 1e-05
+  "10000000": 1e-06

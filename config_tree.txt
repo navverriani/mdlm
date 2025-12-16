@@ -96,7 +96,7 @@ CONFIG
 │       zero_include: true                                                      
 │       hypothesis_file: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/w
 │       output_dir: /rwthfs/rz/cluster/home/ra717140/setups/exp2025-08-22/work/d
-│       sampling_number: 6                                                      
+│       sampling_number: 1                                                      
 │       batch_size: 16                                                          
 │                                                                               
 ├── callbacks
@@ -131,13 +131,13 @@ CONFIG
 │       streaming: false                                                        
 │                                                                               
 ├── model
-│   └── name: small                                                             
+│   └── name: medium                                                            
 │       type: ddit                                                              
-│       hidden_size: 768                                                        
+│       hidden_size: 1024                                                       
 │       cond_dim: 128                                                           
-│       length: 128                                                             
-│       n_blocks: 12                                                            
-│       n_heads: 12                                                             
+│       length: 64                                                              
+│       n_blocks: 24                                                            
+│       n_heads: 16                                                             
 │       scale_by_sigma: true                                                    
 │       dropout: 0.1                                                            
 │       tie_word_embeddings: false                                              

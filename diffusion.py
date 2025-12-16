@@ -399,6 +399,7 @@ class Diffusion(L.LightningModule):
         #  "Detected call of `lr_scheduler.step()` before `optimizer.step()`. "
         #  Not clear if this is a problem or not.
         #  See: https://github.com/Lightning-AI/pytorch-lightning/issues/5558
+
         optimizer = torch.optim.AdamW(
             itertools.chain(self.backbone.parameters(), self.noise.parameters()),
             lr=self.config.optim.lr,
@@ -407,7 +408,13 @@ class Diffusion(L.LightningModule):
             weight_decay=self.config.optim.weight_decay,
         )
 
-        scheduler = hydra.utils.instantiate(self.config.lr_scheduler, optimizer=optimizer)
+        if self.config.lr_scheduler.get("_target_") == "returnn.util.math.PiecewiseLinear":
+            self.config.lr_scheduler["values"] = {int(k): v for k, v in self.config.lr_scheduler["values"].items()}
+            piecewise_fn = hydra.utils.instantiate(self.config.lr_scheduler)
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: piecewise_fn(step))
+        else:
+            scheduler = hydra.utils.instantiate(self.config.lr_scheduler, optimizer=optimizer)
+
         scheduler_dict = {
             "scheduler": scheduler,
             "interval": "step",
