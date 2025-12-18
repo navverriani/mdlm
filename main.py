@@ -64,8 +64,24 @@ def _print_batch(train_ds, valid_ds, tokenizer, k=64):
         print("Batch input_ids.shape", batch["input_ids"].shape)
         first = batch["input_ids"][0, :k]
         last = batch["input_ids"][0, -k:]
+        first_attention_mask = batch["attention_mask"][0, :k]
+        ids = batch["input_ids"]
+        mask = batch["attention_mask"]
+
+        # BOS at position 0 for all sequences
+        assert (ids[:, 0] == tokenizer.bos_token_id).all()
+
+        # EOS must occur in the non-padding region
+        eos_in_mask = ((ids == tokenizer.eos_token_id) & (mask == 1)).any(dim=1)
+        assert eos_in_mask.all()
+
+        # No EOS inside padding
+        assert not ((ids == tokenizer.eos_token_id) & (mask == 0)).any()
+        print("Everything is fine!")
+
         print(f"First {k} tokens:", tokenizer.decode(first))
         print("ids:", first)
+        print(f"First {k} attention mask tokens:", first_attention_mask)
         print(f"Last {k} tokens:", tokenizer.decode(last))
         print("ids:", last)
 
@@ -155,69 +171,97 @@ def _get_scores(config, logger, tokenizer):
             content = f.read()
             hypotheses_dict = ast.literal_eval(content)
 
-    if config.rescore.rescoring_method == "mdlm_elbo":
-        for utt_id, nbest_scores in hypotheses_dict.items():
-            all_log_probs = []
-            hypotheses = [hyp for _, hyp in nbest_scores]
+    for utt_id, nbest_scores in hypotheses_dict.items():
+        all_log_probs = []
+        all_lengths = []
+        hypotheses = [hyp for _, hyp in nbest_scores]
 
-            vocab = tokenizer.get_vocab()
+        vocab = tokenizer.get_vocab()
 
-            hypotheses_ids = []
-            pad_id = tokenizer.pad_token_id
-            bos_id = tokenizer.bos_token_id  # <s>
-            eos_id = tokenizer.eos_token_id  # </s>
-            for hyp in hypotheses:
-                tokens = hyp.split()
-                token_ids = [vocab.get(token, tokenizer.unk_token_id) for token in tokens]
-                token_ids = [bos_id] + token_ids + [eos_id]
-                hypotheses_ids.append(token_ids)
+        hypotheses_ids = []
+        pad_id = tokenizer.pad_token_id
+        bos_id = tokenizer.bos_token_id  # <s>
+        eos_id = tokenizer.eos_token_id  # </s>
+        for hyp in hypotheses:
+            tokens = hyp.split()
+            token_ids = [vocab.get(token, tokenizer.unk_token_id) for token in tokens]
+            token_ids = [bos_id] + token_ids + [eos_id]
+            hypotheses_ids.append(token_ids)
 
+        if config.rescore.fixed_padding:
             max_len = config.model.length
+        else:
+            max_len = min(max([len(token_ids) for token_ids in hypotheses_ids]), config.model.length)
 
-            input_ids_list = []
-            attention_masks = []
+        input_ids_list = []
+        attention_masks = []
 
-            for token_ids in hypotheses_ids:
-                if len(token_ids) > max_len:
-                    token_ids = token_ids[:max_len]
+        for token_ids in hypotheses_ids:
+            if len(token_ids) > max_len - 2:
+                token_ids = token_ids[: max_len - 2]
 
-                # Padding
-                pad_len = max_len - len(token_ids)
-                padded = token_ids + [pad_id] * pad_len
-                mask = [1] * len(token_ids) + [0] * pad_len
+            # Padding
+            pad_len = max_len - len(token_ids)
+            padded = token_ids + [pad_id] * pad_len
+            mask = [1] * len(token_ids) + [0] * pad_len
 
-                input_ids_list.append(padded)
-                attention_masks.append(mask)
+            input_ids_list.append(padded)
+            attention_masks.append(mask)
 
-            input_ids = torch.tensor(input_ids_list, dtype=torch.long).to("cuda")
-            attention_mask = torch.tensor(attention_masks, dtype=torch.long).to("cuda")
+        input_ids = torch.tensor(input_ids_list, dtype=torch.long).to("cuda")
+        attention_mask = torch.tensor(attention_masks, dtype=torch.long).to("cuda")
 
-            for i in range(config.rescore.sampling_number):
-                seed = 42 + i
-                torch.manual_seed(seed)
-                if torch.cuda.is_available():
-                    torch.cuda.manual_seed_all(seed)
+        for i in range(config.rescore.sampling_number):
+            seed = 42 + i
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
 
-                hyp_log_probs = []
-                with torch.no_grad():
-                    for j in range(0, len(input_ids), batch_size):
-                        batch_ids = input_ids[j : j + batch_size]
-                        batch_mask = attention_mask[j : j + batch_size]
+            hyp_log_probs = []
+            hyp_lengths = []
+            with torch.no_grad():
+                for j in range(0, len(input_ids), batch_size):
+                    batch_ids = input_ids[j : j + batch_size]
+                    batch_mask = attention_mask[j : j + batch_size]
 
-                        loss_output = model._loss(batch_ids, batch_mask)
+                    loss_output = model._loss(batch_ids, batch_mask)
 
-                        if config.rescore.full_length:
-                            lengths = batch_mask.sum(dim=-1)
-                        else:
-                            non_zero_mask = (loss_output.nlls != 0.0).float()
-                            lengths = (batch_mask * non_zero_mask).sum(dim=-1).clamp(min=1)
+                    if config.rescore.full_length:
+                        lengths = batch_mask.sum(dim=-1)
+                    else:
+                        non_zero_mask = (loss_output.nlls != 0.0).float()
+                        lengths = (batch_mask * non_zero_mask).sum(dim=-1).clamp(min=1)
+
+                    if not config.rescore.normalize_per_sample:
                         batch_log_prob = -loss_output.nlls.sum(dim=-1) / lengths
-                        hyp_log_probs.append(batch_log_prob)
+                    else:
+                        batch_log_prob = -loss_output.nlls.sum(dim=-1)
+                        hyp_lengths.append(lengths)
+                    hyp_log_probs.append(batch_log_prob)
 
-                    log_probs = torch.cat(hyp_log_probs)
-                    all_log_probs.append(log_probs)
+                log_probs = torch.cat(hyp_log_probs)
+                all_log_probs.append(log_probs)
+                if config.rescore.normalize_per_sample:
+                    all_lengths.append(torch.cat(hyp_lengths))
 
-            all_log_probs = torch.stack(all_log_probs)
+        all_log_probs = torch.stack(all_log_probs)
+        if config.rescore.normalize_per_sample:
+            all_lengths = torch.stack(all_lengths)
+
+            if not config.rescore.zero_include:
+                non_zero_mask = all_log_probs != 0.0
+                sum_log_probs = (all_log_probs * non_zero_mask).sum(dim=0)
+                sum_lengths = (all_lengths * non_zero_mask).sum(dim=0)
+                mean_log_probs = (
+                    torch.where(sum_lengths > 0, sum_log_probs / sum_lengths, torch.zeros_like(sum_log_probs))
+                    .cpu()
+                    .tolist()
+                )
+            else:
+                total_log_probs = all_log_probs.sum(dim=0)
+                total_lengths = all_lengths.sum(dim=0)
+                mean_log_probs = (total_log_probs / total_lengths).cpu().tolist()
+        else:
             if not config.rescore.zero_include:
                 non_zero_mask = all_log_probs != 0.0
                 sum_log_probs = (all_log_probs * non_zero_mask).sum(dim=0)
@@ -227,8 +271,8 @@ def _get_scores(config, logger, tokenizer):
                 )
             else:
                 mean_log_probs = all_log_probs.mean(dim=0).cpu().tolist()
-            scored_hypotheses = list(zip(mean_log_probs, hypotheses))
-            lm_scores[utt_id] = scored_hypotheses
+        scored_hypotheses = list(zip(mean_log_probs, hypotheses))
+        lm_scores[utt_id] = scored_hypotheses
     # https://arxiv.org/abs/1905.06655
     # elif config.rescore.rescoring_method == "mdlm_elbo":
 

@@ -109,3 +109,5 @@ rescore:
   output_dir: ${cwd:}
   sampling_number: 10
   batch_size: 16
+  fixed_padding: true
+  normalize_per_sample: true
