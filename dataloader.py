@@ -515,13 +515,30 @@ def get_dataset(
             bos = np.array([tokenizer.bos_token_id], dtype=data.dtype)
             eos = np.array([tokenizer.eos_token_id], dtype=data.dtype)
 
-            new_data = np.concatenate([bos, data, eos])
+            if len(data) > max_len - 2:
+                data = data[: max_len - 2]
 
-            if len(new_data) > max_len:
-                new_data = new_data[:max_len]
+            new_data = np.concatenate([bos, data, eos])
 
             sample["data"] = new_data
             return sample
+
+        # def add_special_tokens(sample, tokenizer, max_len):
+        #     if "data" not in sample:
+        #         return sample
+        #
+        #     data = np.asarray(sample["data"])
+        #
+        #     bos = np.array([tokenizer.bos_token_id], dtype=data.dtype)
+        #     eos = np.array([tokenizer.eos_token_id], dtype=data.dtype)
+        #
+        #     if len(data) > max_len - 2:
+        #         data = data[: max_len - 2]
+        #
+        #     new_data = np.concatenate([bos, data, eos])
+        #
+        #     sample["data"] = new_data
+        #     return sample
 
         dataset = datasets.Dataset.from_generator(partial(returnn_dataset_iter, ds=dataset_returnn))
         dataset = dataset.map(lambda sample: add_special_tokens(sample, tokenizer, block_size))
