@@ -3,17 +3,62 @@ from diffusion import Diffusion
 import torch
 
 
+def sample_bernoulli_mask(mask_prob: float, attention_mask: torch.Tensor) -> torch.Tensor:
+    batch_size, seq_len = attention_mask.shape
+    mask = torch.rand(batch_size, seq_len, device=attention_mask.device) < mask_prob
+    mask = mask & attention_mask.bool()
+    return mask
+
+
+def sample_multinomial_mask(num_masks: int, attention_mask: torch.Tensor) -> torch.Tensor:
+    batch_size, seq_len = attention_mask.shape
+    device = attention_mask.device
+
+    weights = attention_mask.float()
+    min_len = attention_mask.sum(dim=-1).min().item()
+    n = min(num_masks, int(min_len))
+
+    if n == 0:
+        return torch.zeros(batch_size, seq_len, dtype=torch.bool, device=device)
+
+    indices = torch.multinomial(weights, num_samples=n, replacement=False)
+
+    mask = torch.zeros(batch_size, seq_len, dtype=torch.bool, device=device)
+    mask.scatter_(1, indices, True)
+    return mask
+
+
+def indices_to_mask(indices: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    batch_size, seq_len = attention_mask.shape
+    mask = torch.zeros(batch_size, seq_len, dtype=torch.bool, device=attention_mask.device)
+    mask.scatter_(1, indices, True)
+    mask = mask & attention_mask.bool()
+    return mask
+
+
 class ScoringStrategy(ABC):
     @abstractmethod
-    def compute_scores(self, batch_ids: torch.Tensor, batch_mask: torch.Tensor):
+    def compute_scores(
+        self,
+        batch_ids: torch.Tensor,
+        batch_mask: torch.Tensor,
+        mask_fn: callable = sample_bernoulli_mask,
+        mask_fn_kwargs: dict = None,
+    ):
         pass
 
     @abstractmethod
-    def compute_raw(self, batch_ids: torch.Tensor, batch_mask: torch.Tensor):
+    def compute_raw(
+        self,
+        batch_ids: torch.Tensor,
+        batch_mask: torch.Tensor,
+        mask_fn: callable = sample_bernoulli_mask,
+        mask_fn_kwargs: dict = None,
+    ):
         pass
 
 
-class PseudoELBOScoring(ScoringStrategy):
+class SingleMaskScoring(ScoringStrategy):
     """Baseline Scoring Strategy"""
 
     def __init__(
@@ -30,16 +75,22 @@ class PseudoELBOScoring(ScoringStrategy):
         if torch.cuda.is_available():
             self.model = self.model.to("cuda")
 
-    def compute_raw(self, input_ids: torch.Tensor, attention_mask: torch.Tensor):
+    def compute_raw(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        mask_fn: callable = sample_bernoulli_mask,
+        mask_fn_kwargs: dict = None,
+    ):
+        mask_fn_kwargs = mask_fn_kwargs or {}
         hyp_log_probs = []
         hyp_effective_lengths = []
         with torch.no_grad():
             for j in range(0, len(input_ids), self.batch_size):
                 batch_ids = input_ids[j : j + self.batch_size]
                 batch_mask = attention_mask[j : j + self.batch_size]
-
-                loss_output = self.model._loss(batch_ids, batch_mask)
-
+                mask = mask_fn(attention_mask=batch_mask, **mask_fn_kwargs)
+                loss_output = self.model._loss(batch_ids, batch_mask, diffusion_mask=mask)
                 if self.normalize_by == "seq_length":
                     lengths = batch_mask.sum(dim=-1)
                 else:
@@ -55,21 +106,32 @@ class PseudoELBOScoring(ScoringStrategy):
 
         return all_log_probs, all_effective_lengths
 
-    def compute_scores(self, input_ids: torch.Tensor, attention_mask: torch.Tensor):
-        raw_scores, lengths = self.compute_raw(input_ids, attention_mask)
+    def compute_scores(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        mask_fn: callable = sample_bernoulli_mask,
+        mask_fn_kwargs: dict = None,
+    ):
+        raw_scores, lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
         return raw_scores / lengths.clamp(min=1)
 
 
 class MonteCarloScoring(ScoringStrategy):
     """Monte Carlo Scoring Strategy"""
 
-    def __init__(self, batch_size: int, num_sampling: int, aggregation: str, inner_strategy: ScoringStrategy):
-        self.batch_size = batch_size
+    def __init__(self, num_sampling: int, aggregation: str, inner_strategy: ScoringStrategy):
         self.num_sampling = num_sampling
         self.inner_strategy = inner_strategy
         self.aggregation = aggregation  # can be mean or sum_then_normalize or exclude_zeros
 
-    def compute_raw(self, input_ids: torch.Tensor, attention_mask: torch.Tensor):
+    def compute_raw(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        mask_fn: callable = sample_bernoulli_mask,
+        mask_fn_kwargs: dict = None,
+    ):
         all_log_probs = []
         all_effective_lengths = []
         for i in range(self.num_sampling):
@@ -77,7 +139,7 @@ class MonteCarloScoring(ScoringStrategy):
             torch.manual_seed(seed)
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
-            scores, length = self.inner_strategy.compute_raw(input_ids, attention_mask)
+            scores, length = self.inner_strategy.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
             all_log_probs.append(scores)
             all_effective_lengths.append(length)
         all_log_probs = torch.stack(all_log_probs)
@@ -85,8 +147,14 @@ class MonteCarloScoring(ScoringStrategy):
 
         return all_log_probs, all_effective_lengths
 
-    def compute_scores(self, input_ids: torch.Tensor, attention_mask: torch.Tensor):
-        all_samples, all_lengths = self.compute_raw(input_ids, attention_mask)
+    def compute_scores(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        mask_fn: callable = sample_bernoulli_mask,
+        mask_fn_kwargs: dict = None,
+    ):
+        all_samples, all_lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
         return self._aggregate(all_samples, all_lengths)
 
     def _aggregate(self, all_samples: torch.Tensor, all_lengths: torch.Tensor):

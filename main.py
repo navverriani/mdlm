@@ -283,7 +283,13 @@ def _get_scores(config, logger, tokenizer):
     if config.eval.disable_ema:
         model.ema = None
 
-    scoring_strategy = hydra.utils.instantiate(config.rescore.strategy)
+    if hasattr(config.rescore.strategy, "inner_strategy") and config.rescore.strategy.inner_strategy is not None:
+        inner_strategy = hydra.utils.instantiate(config.rescore.strategy.inner_strategy, model=model)
+        scoring_strategy = hydra.utils.instantiate(config.rescore.strategy, inner_strategy=inner_strategy)
+    else:
+        scoring_strategy = hydra.utils.instantiate(config.rescore.strategy, model=model)
+
+    mask_fn = hydra.utils.instantiate(config.rescore.mask_fn)
 
     callbacks = []
     if "callbacks" in config:
@@ -339,7 +345,12 @@ def _get_scores(config, logger, tokenizer):
         input_ids = torch.tensor(input_ids_list, dtype=torch.long).to("cuda")
         attention_mask = torch.tensor(attention_masks, dtype=torch.long).to("cuda")
 
-        scores = scoring_strategy.compute_scores(input_ids, attention_mask)
+        scores = scoring_strategy.compute_scores(
+            input_ids,
+            attention_mask,
+            mask_fn=mask_fn,
+            mask_fn_kwargs={},
+        )
 
         scored_hypotheses = list(zip(scores, hypotheses))
         lm_scores[utt_id] = scored_hypotheses

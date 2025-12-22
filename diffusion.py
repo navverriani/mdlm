@@ -740,30 +740,44 @@ class Diffusion(L.LightningModule):
         model_output_t0 = self.forward(x0, unet_conditioning)
         return -torch.gather(input=model_output_t0, dim=-1, index=x0[:, :, None]).squeeze(-1)
 
-    def _forward_pass_diffusion(self, x0):
-        t = self._sample_t(x0.shape[0], x0.device)
-        if self.T > 0:
-            t = (t * self.T).to(torch.int)
-            t = t / self.T
-            # t \in {1/T, 2/T, ..., 1}
-            t += 1 / self.T
-
-        if self.change_of_variables:
-            unet_conditioning = t[:, None]
-            f_T = torch.log1p(-torch.exp(-self.noise.sigma_max))
-            f_0 = torch.log1p(-torch.exp(-self.noise.sigma_min))
-            move_chance = torch.exp(f_0 + t * (f_T - f_0))
-            move_chance = move_chance[:, None]
-        else:
-            sigma, dsigma = self.noise(t)
+    def _forward_pass_diffusion(self, x0, diffusion_mask=None):
+        if diffusion_mask is not None:
+            mask_ratio = diffusion_mask.float().mean(dim=-1)  # this is move_chance
+            move_chance = mask_ratio.clamp(
+                min=1e-4, max=1.0 - 1e-4
+            )  # I assume that the model haven't seen 0 or 1 as a moving chance
+            # Noise schedulers other than loglinear not supported yet (all my models were trained with loglinear)
+            # -torch.log1p(-(1 - self.eps) * t) = sigma
+            sigma = -torch.log1p(-move_chance)
+            t = -torch.expm1(-sigma) / (1 - self.noise.eps)
+            t = t.clamp(min=self.sampling_eps, max=1.0 - self.sampling_eps)
+            _, dsigma = self.noise(t)
             unet_conditioning = sigma[:, None]
-            move_chance = 1 - torch.exp(-sigma[:, None])
+            xt = torch.where(diffusion_mask, self.mask_index, x0)
+        else:
+            t = self._sample_t(x0.shape[0], x0.device)
+            if self.T > 0:
+                t = (t * self.T).to(torch.int)
+                t = t / self.T
+                # t \in {1/T, 2/T, ..., 1}
+                t += 1 / self.T
 
-        xt = self.q_xt(x0, move_chance)
+            if self.change_of_variables:
+                unet_conditioning = t[:, None]
+                f_T = torch.log1p(-torch.exp(-self.noise.sigma_max))
+                f_0 = torch.log1p(-torch.exp(-self.noise.sigma_min))
+                move_chance = torch.exp(f_0 + t * (f_T - f_0))
+                move_chance = move_chance[:, None]  # 1-move_chance = e(-sigma) log(1-move_chacne) = -sigma
+            else:
+                sigma, dsigma = self.noise(t)
+                unet_conditioning = sigma[:, None]
+                move_chance = 1 - torch.exp(-sigma[:, None])
+            xt = self.q_xt(x0, move_chance)
         model_output = self.forward(xt, unet_conditioning)
         utils.print_nans(model_output, "model_output")
 
         if self.parameterization == "sedd":
+            assert diffusion_mask is None
             return dsigma[:, None] * self._score_entropy(model_output, sigma[:, None], xt, x0)
 
         if self.T > 0:
@@ -782,14 +796,14 @@ class Diffusion(L.LightningModule):
 
         return -log_p_theta * (dsigma / torch.expm1(sigma))[:, None]
 
-    def _loss(self, x0, attention_mask):
+    def _loss(self, x0, attention_mask, diffusion_mask=None):
         (input_tokens, output_tokens, attention_mask) = self._maybe_sub_sample(x0, attention_mask)
 
         if self.parameterization == "ar":
             logprobs = self.backbone(input_tokens, None)
             loss = -logprobs.gather(-1, output_tokens[:, :, None])[:, :, 0]
         else:
-            loss = self._forward_pass_diffusion(input_tokens)
+            loss = self._forward_pass_diffusion(input_tokens, diffusion_mask)
 
         nlls = loss * attention_mask
         count = attention_mask.sum()
