@@ -94,8 +94,7 @@ class SingleMaskScoring(ScoringStrategy):
                 if self.normalize_by == "seq_length":
                     lengths = batch_mask.sum(dim=-1)
                 else:
-                    non_zero_mask = (loss_output.nlls != 0.0).float()
-                    lengths = (batch_mask * non_zero_mask).sum(dim=-1).clamp(min=1)
+                    lengths = loss_output.num_masked.clamp(min=1)
 
                 batch_log_prob = -loss_output.nlls.sum(dim=-1)
                 hyp_log_probs.append(batch_log_prob)
@@ -173,3 +172,55 @@ class MonteCarloScoring(ScoringStrategy):
 
         else:
             raise ValueError(f"Unknown aggregation method: {self.aggregation}")
+
+
+class CouplingMaskStrategy(ScoringStrategy):
+    def __init__(
+        self,
+        model: Diffusion,
+        *,
+        batch_size: int,
+    ):
+        self.batch_size = batch_size
+        self.model = model
+        self.model.eval()
+        if torch.cuda.is_available():
+            self.model = self.model.to("cuda")
+
+    def compute_raw(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        mask_fn: callable = sample_bernoulli_mask,
+        mask_fn_kwargs: dict = None,
+    ):
+        mask_fn_kwargs = mask_fn_kwargs or {}
+        hyp_log_probs = []
+        hyp_effective_lengths = []
+        with torch.no_grad():
+            for j in range(0, len(input_ids), self.batch_size):
+                batch_ids = input_ids[j : j + self.batch_size]
+                batch_mask = attention_mask[j : j + self.batch_size]
+                mask_1 = mask_fn(attention_mask=batch_mask, **mask_fn_kwargs)
+                loss_output_1 = self.model._loss(batch_ids, batch_mask, diffusion_mask=mask_1)
+                mask_2 = (~mask_1) & batch_mask.bool()
+                loss_output_2 = self.model._loss(batch_ids, batch_mask, diffusion_mask=mask_2)
+                lengths = batch_mask.sum(dim=-1)
+                batch_log_prob = -loss_output_1.nlls.sum(dim=-1) + -loss_output_2.nlls.sum(dim=-1)
+                hyp_log_probs.append(batch_log_prob)
+                hyp_effective_lengths.append(lengths)
+
+        all_log_probs = torch.cat(hyp_log_probs)
+        all_effective_lengths = torch.cat(hyp_effective_lengths)
+
+        return all_log_probs, all_effective_lengths
+
+    def compute_scores(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        mask_fn: callable = sample_bernoulli_mask,
+        mask_fn_kwargs: dict = None,
+    ):
+        raw_scores, lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
+        return raw_scores / lengths.clamp(min=1)

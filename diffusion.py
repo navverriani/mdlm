@@ -35,6 +35,7 @@ class Loss:
     loss: torch.FloatTensor
     nlls: torch.FloatTensor
     token_mask: torch.FloatTensor
+    num_masked: torch.FloatTensor = None
 
 
 class NLL(torchmetrics.aggregation.MeanMetric):
@@ -773,12 +774,13 @@ class Diffusion(L.LightningModule):
                 unet_conditioning = sigma[:, None]
                 move_chance = 1 - torch.exp(-sigma[:, None])
             xt = self.q_xt(x0, move_chance)
+        mask_count = (xt == self.mask_index).sum(dim=-1)
         model_output = self.forward(xt, unet_conditioning)
         utils.print_nans(model_output, "model_output")
 
         if self.parameterization == "sedd":
             assert diffusion_mask is None
-            return dsigma[:, None] * self._score_entropy(model_output, sigma[:, None], xt, x0)
+            return dsigma[:, None] * self._score_entropy(model_output, sigma[:, None], xt, x0), mask_count
 
         if self.T > 0:
             diffusion_loss = self._d3pm_loss(model_output=model_output, xt=xt, x0=x0, t=t)
@@ -786,15 +788,15 @@ class Diffusion(L.LightningModule):
                 reconstruction_loss = self._reconstruction_loss(x0)
             elif self.parameterization == "subs":
                 reconstruction_loss = 0
-            return reconstruction_loss + diffusion_loss
+            return reconstruction_loss + diffusion_loss, mask_count
 
         # SUBS parameterization, continuous time.
         log_p_theta = torch.gather(input=model_output, dim=-1, index=x0[:, :, None]).squeeze(-1)
 
         if self.change_of_variables or self.importance_sampling:
-            return log_p_theta * torch.log1p(-torch.exp(-self.noise.sigma_min))
+            return log_p_theta * torch.log1p(-torch.exp(-self.noise.sigma_min)), mask_count
 
-        return -log_p_theta * (dsigma / torch.expm1(sigma))[:, None]
+        return (-log_p_theta * (dsigma / torch.expm1(sigma))[:, None]), mask_count
 
     def _loss(self, x0, attention_mask, diffusion_mask=None):
         (input_tokens, output_tokens, attention_mask) = self._maybe_sub_sample(x0, attention_mask)
@@ -802,8 +804,9 @@ class Diffusion(L.LightningModule):
         if self.parameterization == "ar":
             logprobs = self.backbone(input_tokens, None)
             loss = -logprobs.gather(-1, output_tokens[:, :, None])[:, :, 0]
+            mask_count = None
         else:
-            loss = self._forward_pass_diffusion(input_tokens, diffusion_mask)
+            loss, mask_count = self._forward_pass_diffusion(input_tokens, diffusion_mask)
 
         nlls = loss * attention_mask
         count = attention_mask.sum()
@@ -811,7 +814,7 @@ class Diffusion(L.LightningModule):
         batch_nll = nlls.sum()
         token_nll = batch_nll / count
 
-        return Loss(loss=token_nll, nlls=nlls, token_mask=attention_mask)
+        return Loss(loss=token_nll, nlls=nlls, token_mask=attention_mask, num_masked=mask_count)
 
     def _score_entropy(self, log_score, sigma, xt, x0):
         """Computes the SEDD loss.

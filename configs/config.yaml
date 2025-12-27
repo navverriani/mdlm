@@ -15,6 +15,7 @@ time_conditioning: False
 T: 0  # 0 (continuous time) / 1000 
 subs_masking: False
 behaviour_version: 1
+returnn_batching_enabled: false
 
 seed: 1
 
