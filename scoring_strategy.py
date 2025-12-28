@@ -10,6 +10,18 @@ def sample_bernoulli_mask(mask_prob: float, attention_mask: torch.Tensor) -> tor
     return mask
 
 
+def sample_t_bernoulli_mask(
+    attention_mask: torch.Tensor,
+    t_min: float = 0.0,
+    t_max: float = 1.0,
+) -> torch.Tensor:
+    batch_size, seq_len = attention_mask.shape
+    t = torch.rand(batch_size, device=attention_mask.device) * (t_max - t_min) + t_min
+    mask = torch.rand(batch_size, seq_len, device=attention_mask.device) < t[:, None]
+    mask = mask & attention_mask.bool()
+    return mask
+
+
 def sample_multinomial_mask(num_masks: int, attention_mask: torch.Tensor) -> torch.Tensor:
     batch_size, seq_len = attention_mask.shape
     device = attention_mask.device
