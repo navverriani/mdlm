@@ -16,8 +16,8 @@ def sample_t_bernoulli_mask(
     t_max: float = 1.0,
 ) -> torch.Tensor:
     batch_size, seq_len = attention_mask.shape
-    t = torch.rand(batch_size, device=attention_mask.device) * (t_max - t_min) + t_min
-    mask = torch.rand(batch_size, seq_len, device=attention_mask.device) < t[:, None]
+    t = torch.rand(1, device=attention_mask.device).item() * (t_max - t_min) + t_min
+    mask = torch.rand(batch_size, seq_len, device=attention_mask.device) < t
     mask = mask & attention_mask.bool()
     return mask
 
@@ -37,6 +37,14 @@ def sample_multinomial_mask(num_masks: int, attention_mask: torch.Tensor) -> tor
 
     mask = torch.zeros(batch_size, seq_len, dtype=torch.bool, device=device)
     mask.scatter_(1, indices, True)
+    return mask
+
+
+def sample_length_of_mask(attention_mask: torch.Tensor) -> torch.Tensor:
+    low = 1
+    high = attention_mask.sum(dim=-1).min().item()
+    length = torch.randint(low, high, (1,)).item()
+    mask = sample_multinomial_mask(length, attention_mask)
     return mask
 
 
@@ -236,3 +244,83 @@ class CouplingMaskStrategy(ScoringStrategy):
     ):
         raw_scores, lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
         return raw_scores / lengths.clamp(min=1)
+
+
+class MultiTScoringStrategy(ScoringStrategy):
+    def __init__(
+        self,
+        model: Diffusion,
+        *,
+        batch_size: int,
+        t_values: list,
+        num_iterations: int,
+        inner_strategy: ScoringStrategy,
+        aggregation: str = "mean",
+    ):
+        self.batch_size = batch_size
+        self.model = model
+        self.model.eval()
+        self.t_values = t_values
+        self.num_iterations = num_iterations
+        self.inner_strategy = inner_strategy
+        self.aggregation = aggregation
+        if torch.cuda.is_available():
+            self.model = self.model.to("cuda")
+
+    def compute_raw(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        mask_fn: callable = sample_bernoulli_mask,
+        mask_fn_kwargs: dict = None,
+    ):
+        all_log_probs = []
+        all_effective_lengths = []
+        iterations_per_t = int((self.num_iterations / len(self.t_values)))
+        assert mask_fn is sample_bernoulli_mask
+        for t_idx, t in enumerate(self.t_values):
+            mask_fn_kwargs = {"mask_prob": t}
+            for i in range(iterations_per_t):
+                seed = 42 + t_idx * iterations_per_t + i
+                torch.manual_seed(seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(seed)
+                scores, length = self.inner_strategy.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
+                all_log_probs.append(scores)
+                all_effective_lengths.append(length)
+        all_log_probs = torch.stack(all_log_probs)
+        all_effective_lengths = torch.stack(all_effective_lengths)
+
+        return all_log_probs, all_effective_lengths
+
+    def compute_scores(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        mask_fn: callable = sample_bernoulli_mask,
+        mask_fn_kwargs: dict = None,
+    ):
+        all_samples, all_lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
+        return self._aggregate(all_samples, all_lengths)
+
+    def _aggregate(self, all_samples: torch.Tensor, all_lengths: torch.Tensor):
+        if self.aggregation == "mean":
+            normalized = all_samples / all_lengths.clamp(min=1)
+            return normalized.mean(dim=0)
+
+        elif self.aggregation == "sum_then_normalize":
+            total_scores = all_samples.sum(dim=0)
+            total_lengths = all_lengths.sum(dim=0)
+            return total_scores / total_lengths
+
+        elif self.aggregation == "exclude_zeros":
+            mask = all_samples != 0
+            return (all_samples * mask).sum(dim=0) / mask.sum(dim=0).clamp(min=1)
+
+        else:
+            raise ValueError(f"Unknown aggregation method: {self.aggregation}")
+
+#
+# class SequentialMaskScoring(ScoringStrategy):
+#     def __init__()
+#

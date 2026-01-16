@@ -1,3 +1,4 @@
+import itertools
 import os
 
 import ast
@@ -280,8 +281,10 @@ def _ppl_eval(config, logger, tokenizer):
 
 def _get_scores(config, logger, tokenizer):
     model = _load_from_checkpoint(config=config, tokenizer=tokenizer)
-    if config.eval.disable_ema:
-        model.ema = None
+    if config.rescore.ema:
+        assert model.ema is not None
+        model.ema.store(itertools.chain(model.backbone.parameters(), model.noise.parameters()))
+        model.ema.copy_to(itertools.chain(model.backbone.parameters(), model.noise.parameters()))
 
     if hasattr(config.rescore.strategy, "inner_strategy") and config.rescore.strategy.inner_strategy is not None:
         inner_strategy = hydra.utils.instantiate(config.rescore.strategy.inner_strategy, model=model)

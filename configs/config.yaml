@@ -122,3 +122,4 @@ rescore:
   mask_fn:
     _target_: scoring_strategy.sample_bernoulli_mask
     _partial_: true
+  ema: False
