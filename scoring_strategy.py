@@ -320,7 +320,60 @@ class MultiTScoringStrategy(ScoringStrategy):
         else:
             raise ValueError(f"Unknown aggregation method: {self.aggregation}")
 
-#
-# class SequentialMaskScoring(ScoringStrategy):
-#     def __init__()
-#
+
+class SequentialMaskScoring(ScoringStrategy):
+    def __init__(
+        self,
+        model: Diffusion,
+        *,
+        batch_size: int,
+    ):
+        self.batch_size = batch_size
+        self.model = model
+        self.model.eval()
+        if torch.cuda.is_available():
+            self.model = self.model.to("cuda")
+
+    def compute_raw(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        mask_fn: callable = sample_bernoulli_mask,
+        mask_fn_kwargs: dict = None,
+    ):
+        mask_fn_kwargs = mask_fn_kwargs or {}
+        hyp_log_probs = []
+        hyp_effective_lengths = []
+        with torch.no_grad():
+            for j in range(0, len(input_ids), self.batch_size):
+                batch_ids = input_ids[j : j + self.batch_size]
+                batch_mask = attention_mask[j : j + self.batch_size]
+                batch_size, seq_len = batch_ids.shape
+
+                log_probs = []
+                for i in range(seq_len):
+                    indices = torch.zeros(batch_size, seq_len, device=batch_ids.device)
+                    indices[:, i] = 1
+                    mask = indices_to_mask(indices, batch_mask)
+                    loss_output = self.model._loss(batch_ids, batch_mask, diffusion_mask=mask)
+                    log_probs.append(loss_output.nlls.sum(dim=-1))
+
+                lengths = batch_mask.sum(dim=-1)
+                batch_log_prob = torch.stack(log_probs).sum(dim=0)
+                hyp_log_probs.append(batch_log_prob)
+                hyp_effective_lengths.append(lengths)
+
+        all_log_probs = torch.cat(hyp_log_probs)
+        all_effective_lengths = torch.cat(hyp_effective_lengths)
+
+        return all_log_probs, all_effective_lengths
+
+    def compute_scores(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        mask_fn: callable = sample_bernoulli_mask,
+        mask_fn_kwargs: dict = None,
+    ):
+        raw_scores, lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
+        return raw_scores / lengths.clamp(min=1)

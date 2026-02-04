@@ -10,4 +10,6 @@ core.*.hpc.itc.rwth-aachen.de.*
 outputs
 checkpoints
 config_tree.txt
-wandb
+wandblightning_logs/
+wandb/
+lightning_logs/
