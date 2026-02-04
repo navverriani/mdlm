@@ -341,6 +341,7 @@ class SequentialMaskScoring(ScoringStrategy):
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
     ):
+        assert mask_fn is indices_to_mask
         mask_fn_kwargs = mask_fn_kwargs or {}
         hyp_log_probs = []
         hyp_effective_lengths = []
@@ -354,7 +355,7 @@ class SequentialMaskScoring(ScoringStrategy):
                 for i in range(seq_len):
                     indices = torch.zeros(batch_size, seq_len, device=batch_ids.device)
                     indices[:, i] = 1
-                    mask = indices_to_mask(indices, batch_mask)
+                    mask = mask_fn(indices, batch_mask, **mask_fn_kwargs)
                     loss_output = self.model._loss(batch_ids, batch_mask, diffusion_mask=mask)
                     log_probs.append(loss_output.nlls.sum(dim=-1))
 
