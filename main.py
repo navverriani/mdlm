@@ -15,6 +15,8 @@ import dataloader
 import diffusion
 import utils
 
+from tqdm import tqdm
+
 omegaconf.OmegaConf.register_new_resolver("cwd", os.getcwd)
 omegaconf.OmegaConf.register_new_resolver("device_count", torch.cuda.device_count)
 omegaconf.OmegaConf.register_new_resolver("eval", eval)
@@ -312,7 +314,7 @@ def _get_scores(config, logger, tokenizer):
 
     seed = config.rescore.get("seed", 42)
 
-    for utt_id, nbest_scores in hypotheses_dict.items():
+    for utt_id, nbest_scores in tqdm(hypotheses_dict.items(), desc="Rescoring"):
         hypotheses = [hyp for _, hyp in nbest_scores]
 
         vocab = tokenizer.get_vocab()

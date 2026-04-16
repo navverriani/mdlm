@@ -3,6 +3,8 @@ from diffusion import Diffusion
 from functools import partial
 import torch
 
+from tqdm import tqdm
+
 
 def sample_bernoulli_mask(mask_prob: float, attention_mask: torch.Tensor) -> torch.Tensor:
     batch_size, seq_len = attention_mask.shape
@@ -159,7 +161,7 @@ class MonteCarloScoring(ScoringStrategy):
     ):
         all_log_probs = []
         all_effective_lengths = []
-        for i in range(self.num_sampling):
+        for i in tqdm(range(self.num_sampling), desc="MC samples", leave=False):
             new_seed = seed + i
             torch.manual_seed(new_seed)
             if torch.cuda.is_available():
