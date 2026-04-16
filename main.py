@@ -310,6 +310,8 @@ def _get_scores(config, logger, tokenizer):
             content = f.read()
             hypotheses_dict = ast.literal_eval(content)
 
+    seed = config.rescore.get("seed", 42)
+
     for utt_id, nbest_scores in hypotheses_dict.items():
         hypotheses = [hyp for _, hyp in nbest_scores]
 
@@ -349,10 +351,7 @@ def _get_scores(config, logger, tokenizer):
         attention_mask = torch.tensor(attention_masks, dtype=torch.long).to("cuda")
 
         scores = scoring_strategy.compute_scores(
-            input_ids,
-            attention_mask,
-            mask_fn=mask_fn,
-            mask_fn_kwargs={},
+            input_ids, attention_mask, mask_fn=mask_fn, mask_fn_kwargs={}, seed=seed
         )
 
         scored_hypotheses = list(zip(scores, hypotheses))

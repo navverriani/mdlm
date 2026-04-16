@@ -65,6 +65,7 @@ class ScoringStrategy(ABC):
         batch_mask: torch.Tensor,
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
+        seed: int = 42,
     ):
         pass
 
@@ -75,6 +76,7 @@ class ScoringStrategy(ABC):
         batch_mask: torch.Tensor,
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
+        seed: int = 42,
     ):
         pass
 
@@ -102,6 +104,7 @@ class SingleMaskScoring(ScoringStrategy):
         attention_mask: torch.Tensor,
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
+        seed: int = 42,
     ):
         mask_fn_kwargs = mask_fn_kwargs or {}
         hyp_log_probs = []
@@ -132,6 +135,7 @@ class SingleMaskScoring(ScoringStrategy):
         attention_mask: torch.Tensor,
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
+        seed: int = 42,
     ):
         raw_scores, lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
         return raw_scores / lengths.clamp(min=1)
@@ -151,14 +155,15 @@ class MonteCarloScoring(ScoringStrategy):
         attention_mask: torch.Tensor,
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
+        seed: int = 42,
     ):
         all_log_probs = []
         all_effective_lengths = []
         for i in range(self.num_sampling):
-            seed = 42 + i
-            torch.manual_seed(seed)
+            new_seed = seed + i
+            torch.manual_seed(new_seed)
             if torch.cuda.is_available():
-                torch.cuda.manual_seed_all(seed)
+                torch.cuda.manual_seed_all(new_seed)
             scores, length = self.inner_strategy.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
             all_log_probs.append(scores)
             all_effective_lengths.append(length)
@@ -173,8 +178,9 @@ class MonteCarloScoring(ScoringStrategy):
         attention_mask: torch.Tensor,
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
+        seed: int = 42,
     ):
-        all_samples, all_lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
+        all_samples, all_lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs, seed=seed)
         return self._aggregate(all_samples, all_lengths)
 
     def _aggregate(self, all_samples: torch.Tensor, all_lengths: torch.Tensor):
@@ -214,6 +220,7 @@ class CouplingMaskStrategy(ScoringStrategy):
         attention_mask: torch.Tensor,
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
+        seed: int = 42,
     ):
         mask_fn_kwargs = mask_fn_kwargs or {}
         hyp_log_probs = []
@@ -242,6 +249,7 @@ class CouplingMaskStrategy(ScoringStrategy):
         attention_mask: torch.Tensor,
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
+        seed: int = 42,
     ):
         raw_scores, lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
         return raw_scores / lengths.clamp(min=1)
@@ -274,6 +282,7 @@ class MultiTScoringStrategy(ScoringStrategy):
         attention_mask: torch.Tensor,
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
+        seed: int = 42,
     ):
         all_log_probs = []
         all_effective_lengths = []
@@ -282,10 +291,10 @@ class MultiTScoringStrategy(ScoringStrategy):
         for t_idx, t in enumerate(self.t_values):
             mask_fn_kwargs = {"mask_prob": t}
             for i in range(iterations_per_t):
-                seed = 42 + t_idx * iterations_per_t + i
-                torch.manual_seed(seed)
+                new_seed = seed + t_idx * iterations_per_t + i
+                torch.manual_seed(new_seed)
                 if torch.cuda.is_available():
-                    torch.cuda.manual_seed_all(seed)
+                    torch.cuda.manual_seed_all(new_seed)
                 scores, length = self.inner_strategy.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
                 all_log_probs.append(scores)
                 all_effective_lengths.append(length)
@@ -300,8 +309,9 @@ class MultiTScoringStrategy(ScoringStrategy):
         attention_mask: torch.Tensor,
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
+        seed: int = 42,
     ):
-        all_samples, all_lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
+        all_samples, all_lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs, seed)
         return self._aggregate(all_samples, all_lengths)
 
     def _aggregate(self, all_samples: torch.Tensor, all_lengths: torch.Tensor):
@@ -322,6 +332,7 @@ class MultiTScoringStrategy(ScoringStrategy):
             raise ValueError(f"Unknown aggregation method: {self.aggregation}")
 
 
+# It is not correct
 class SequentialMaskScoring(ScoringStrategy):
     def __init__(
         self,
@@ -341,6 +352,7 @@ class SequentialMaskScoring(ScoringStrategy):
         attention_mask: torch.Tensor,
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
+        seed: int = 42,
     ):
         if isinstance(mask_fn, partial):
             assert mask_fn.func is indices_to_mask
@@ -380,6 +392,7 @@ class SequentialMaskScoring(ScoringStrategy):
         attention_mask: torch.Tensor,
         mask_fn: callable = sample_bernoulli_mask,
         mask_fn_kwargs: dict = None,
+        seed: int = 42,
     ):
         raw_scores, lengths = self.compute_raw(input_ids, attention_mask, mask_fn, mask_fn_kwargs)
         return raw_scores / lengths.clamp(min=1)
